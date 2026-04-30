@@ -14,13 +14,16 @@ export default function PlayerChatBubble({
 
   useEffect(() => {
     if (!hasText) {
-      setShow(false);
-      return;
+      const t = window.setTimeout(() => setShow(false), 0);
+      return () => window.clearTimeout(t);
     }
 
-    setShow(true);
+    const tShow = window.setTimeout(() => setShow(true), 0);
     const t = window.setTimeout(() => setShow(false), durationMs);
-    return () => window.clearTimeout(t);
+    return () => {
+      window.clearTimeout(tShow);
+      window.clearTimeout(t);
+    };
   }, [hasText, durationMs]);
 
   return (

@@ -1,38 +1,129 @@
-import Link from 'next/link';
+'use client';
 
-const mockRooms = [
-  {
-    roomId: 1,
-    title: '친구들과 그림 대결',
-    curPlayers: 2,
-    maxPlayers: 4,
-    totalRounds: 3,
-    isPlaying: false,
-    hostNickname: '도환',
-  },
-  {
-    roomId: 2,
-    title: 'AI 판별 테스트방',
-    curPlayers: 3,
-    maxPlayers: 4,
-    totalRounds: 5,
-    isPlaying: true,
-    hostNickname: 'AI봇',
-  },
-  {
-    roomId: 3,
-    title: '빠른 1라운드 승부',
-    curPlayers: 1,
-    maxPlayers: 2,
-    totalRounds: 1,
-    isPlaying: false,
-    hostNickname: '정원',
-  },
-];
+import Link from 'next/link';
+import { useRouter } from 'next/navigation';
+import { useEffect, useMemo, useState } from 'react';
+
+type ApiResponse<T> = {
+  resultCode: string;
+  msg: string;
+  data: T;
+};
+
+type Room = {
+  roomId: number;
+  title: string;
+  curPlayers: number;
+  maxPlayers: number;
+  isPlaying: boolean;
+  hostNickname: string;
+};
+
+const API_BASE_URL = '/api/backend';
+
+async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
+  const token = localStorage.getItem('accessToken');
+
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    ...init,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(init?.headers ?? {}),
+    },
+    cache: 'no-store',
+  });
+
+  const contentType = response.headers.get('content-type') || '';
+  let json: ApiResponse<T> | null = null;
+  let text: string | null = null;
+
+  try {
+    if (contentType.includes('application/json')) {
+      json = (await response.json()) as ApiResponse<T>;
+    } else {
+      text = await response.text();
+    }
+  } catch {
+    text = await response.text().catch(() => null);
+  }
+
+  if (!response.ok) {
+    const msg = json?.msg || text || `요청 실패 (HTTP ${response.status})`;
+    throw new Error(msg);
+  }
+  if (!json) throw new Error(text || `요청 실패 (HTTP ${response.status})`);
+  return json.data;
+}
 
 export default function RoomsPage() {
-  const waitingRoomCount = mockRooms.filter((room) => !room.isPlaying).length;
-  const playingRoomCount = mockRooms.filter((room) => room.isPlaying).length;
+  const router = useRouter();
+  const [rooms, setRooms] = useState<Room[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  const [showCreate, setShowCreate] = useState(false);
+  const [title, setTitle] = useState('');
+  const [maxPlayers, setMaxPlayers] = useState(2);
+  const [totalRounds, setTotalRounds] = useState(3);
+  const [password, setPassword] = useState('');
+
+  const stats = useMemo(() => {
+    const waiting = rooms.filter((r) => !r.isPlaying).length;
+    const playing = rooms.filter((r) => r.isPlaying).length;
+    return { waiting, playing, total: rooms.length };
+  }, [rooms]);
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        setLoading(true);
+        setError('');
+        const data = await apiFetch<Room[]>(`/api/rooms`, { method: 'GET' });
+        setRooms(data ?? []);
+      } catch (e) {
+        // 방 목록은 로그인 필요라서, 토큰이 없으면 여기서 실패할 수 있음
+        setError(e instanceof Error ? e.message : '방 목록을 불러오지 못했습니다.');
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, []);
+
+  async function handleCreateRoom() {
+    setError('');
+    if (!title.trim()) {
+      setError('방 제목을 입력해주세요.');
+      return;
+    }
+    const token = localStorage.getItem('accessToken');
+    if (!token) {
+      setError('로그인이 필요합니다.');
+      return;
+    }
+
+    try {
+      setLoading(true);
+      const body = {
+        title: title.trim(),
+        maxPlayers,
+        totalRounds,
+        password: password.trim() ? password.trim() : '',
+      };
+      const created = await apiFetch<{ roomId: number }>(`/api/rooms`, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
+
+      if (created?.roomId) {
+        router.push(`/rooms/${created.roomId}`);
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '방 생성에 실패했습니다.');
+    } finally {
+      setLoading(false);
+    }
+  }
 
   return (
     <main className="relative min-h-[calc(100vh-4rem)] overflow-hidden text-white">
@@ -63,17 +154,80 @@ export default function RoomsPage() {
 
           <div className="rounded-[2rem] border border-white/10 bg-white/[0.04] p-5 shadow-2xl backdrop-blur">
             <div className="grid grid-cols-3 gap-3">
-              <LobbyStat label="전체 방" value={mockRooms.length} color="text-white" />
-              <LobbyStat label="대기중" value={waitingRoomCount} color="text-emerald-300" />
-              <LobbyStat label="게임중" value={playingRoomCount} color="text-rose-300" />
+              <LobbyStat label="전체 방" value={stats.total} color="text-white" />
+              <LobbyStat label="대기중" value={stats.waiting} color="text-emerald-300" />
+              <LobbyStat label="게임중" value={stats.playing} color="text-rose-300" />
             </div>
 
             <button
               type="button"
+              onClick={() => setShowCreate((v) => !v)}
               className="mt-4 w-full rounded-2xl bg-gradient-to-r from-blue-500 to-violet-500 px-5 py-4 text-base font-black text-white shadow-lg shadow-blue-500/25 transition hover:from-blue-400 hover:to-violet-400"
             >
               + 새 게임방 만들기
             </button>
+
+            {showCreate && (
+              <div className="mt-4 rounded-2xl border border-white/10 bg-slate-950/40 p-4">
+                <div className="space-y-3">
+                  <label className="block">
+                    <span className="mb-1 block text-xs font-semibold text-slate-300">방 제목</span>
+                    <input
+                      value={title}
+                      onChange={(e) => setTitle(e.target.value)}
+                      className="w-full rounded-xl border border-white/10 bg-slate-900/60 px-3 py-2 text-sm text-white outline-none"
+                      placeholder="예: 친구들과 그림 대결"
+                    />
+                  </label>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <label className="block">
+                      <span className="mb-1 block text-xs font-semibold text-slate-300">인원 (2~4)</span>
+                      <input
+                        type="number"
+                        value={maxPlayers}
+                        onChange={(e) => setMaxPlayers(Number(e.target.value))}
+                        className="w-full rounded-xl border border-white/10 bg-slate-900/60 px-3 py-2 text-sm text-white outline-none"
+                        min={2}
+                        max={4}
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="mb-1 block text-xs font-semibold text-slate-300">라운드 (1~10)</span>
+                      <input
+                        type="number"
+                        value={totalRounds}
+                        onChange={(e) => setTotalRounds(Number(e.target.value))}
+                        className="w-full rounded-xl border border-white/10 bg-slate-900/60 px-3 py-2 text-sm text-white outline-none"
+                        min={1}
+                        max={10}
+                      />
+                    </label>
+                  </div>
+
+                  <label className="block">
+                    <span className="mb-1 block text-xs font-semibold text-slate-300">방 비밀번호 (선택)</span>
+                    <input
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      className="w-full rounded-xl border border-white/10 bg-slate-900/60 px-3 py-2 text-sm text-white outline-none"
+                      placeholder="비밀번호 없음이면 빈칸"
+                    />
+                  </label>
+
+                  {error && <p className="text-sm text-rose-300">{error}</p>}
+
+                  <button
+                    type="button"
+                    disabled={loading}
+                    onClick={() => void handleCreateRoom()}
+                    className="w-full rounded-xl bg-gradient-to-r from-blue-500 to-violet-500 px-4 py-3 text-sm font-black text-white shadow-lg shadow-blue-500/25 transition hover:from-blue-400 hover:to-violet-400 disabled:opacity-60"
+                  >
+                    {loading ? '생성 중...' : '방 만들기'}
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
 
@@ -88,8 +242,14 @@ export default function RoomsPage() {
           </div>
         </div>
 
+        {error && !showCreate && (
+          <div className="mb-6 rounded-[2rem] border border-white/10 bg-white/[0.04] p-8 text-center text-sm text-rose-300 shadow-2xl backdrop-blur">
+            {error}
+          </div>
+        )}
+
         <section className="grid gap-5 lg:grid-cols-3">
-          {mockRooms.map((room) => (
+          {rooms.map((room) => (
             <Link
               key={room.roomId}
               href={`/rooms/${room.roomId}`}
@@ -100,9 +260,7 @@ export default function RoomsPage() {
 
               <div className="mb-6 flex items-start justify-between gap-4">
                 <div>
-                  <p className="mb-2 text-xs font-semibold text-slate-400">
-                    방 #{room.roomId}
-                  </p>
+                  <p className="mb-2 text-xs font-semibold text-slate-400">방 #{room.roomId}</p>
                   <h3 className="line-clamp-2 text-2xl font-black leading-tight text-white transition group-hover:text-blue-100">
                     {room.title}
                   </h3>
@@ -116,7 +274,7 @@ export default function RoomsPage() {
 
               <div className="mb-6 grid grid-cols-2 gap-3">
                 <RoomInfoBox label="인원" value={`${room.curPlayers}/${room.maxPlayers}`} />
-                <RoomInfoBox label="라운드" value={`${room.totalRounds}R`} />
+                <RoomInfoBox label="라운드" value="-" />
               </div>
 
               <div className="h-2 overflow-hidden rounded-full bg-slate-800/70">
@@ -128,9 +286,7 @@ export default function RoomsPage() {
 
               <div className="mt-6 flex items-center justify-between">
                 <span className="text-sm text-slate-400">
-                  {room.maxPlayers - room.curPlayers > 0
-                    ? `${room.maxPlayers - room.curPlayers}자리 남음`
-                    : '정원 마감'}
+                  {room.maxPlayers - room.curPlayers > 0 ? `${room.maxPlayers - room.curPlayers}자리 남음` : '정원 마감'}
                 </span>
 
                 <span className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-bold text-white transition group-hover:bg-blue-400/10 group-hover:border-blue-300/30">
@@ -141,7 +297,7 @@ export default function RoomsPage() {
           ))}
         </section>
 
-        {mockRooms.length === 0 && (
+        {rooms.length === 0 && !loading && (
           <div className="mt-10 rounded-[2rem] border border-white/10 bg-white/[0.04] p-12 text-center shadow-2xl backdrop-blur">
             <p className="text-2xl font-black text-white">아직 생성된 방이 없습니다.</p>
             <p className="mt-3 text-slate-400">새로운 방을 만들어 첫 번째 게임을 시작해보세요.</p>
