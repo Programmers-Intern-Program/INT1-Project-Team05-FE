@@ -27,8 +27,15 @@ export default function RoomsPage() {
   const [totalRounds, setTotalRounds] = useState(3);
   const [password, setPassword] = useState('');
 
-  /** 참가자 0명인 방은 백엔드에 남아 있어도 로비에서 숨김(유령 방 완화) */
-  const lobbyRooms = useMemo(() => rooms.filter((r) => r.curPlayers > 0), [rooms]);
+  /**
+   * 유령 방 완화:
+   * - 참가자 0명은 숨김
+   * - 진행 중인데 1명 이하로 남은 비정상 방도 숨김
+   */
+  const lobbyRooms = useMemo(
+    () => rooms.filter((r) => r.curPlayers > 0 && !(r.isPlaying && r.curPlayers <= 1)),
+    [rooms],
+  );
 
   const stats = useMemo(() => {
     const waiting = lobbyRooms.filter((r) => !r.isPlaying).length;
@@ -60,6 +67,11 @@ export default function RoomsPage() {
     const initialTimer = window.setTimeout(() => {
       void loadRooms();
     }, 0);
+    const pollTimer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        void loadRooms();
+      }
+    }, 2200);
 
     // 뒤로가기 복귀(BFCache), 탭 포커스 복귀 시 목록 재동기화
     const onPageShow = () => {
@@ -79,6 +91,7 @@ export default function RoomsPage() {
     document.addEventListener('visibilitychange', onVisibility);
     return () => {
       window.clearTimeout(initialTimer);
+      window.clearInterval(pollTimer);
       window.removeEventListener('pageshow', onPageShow);
       window.removeEventListener('focus', onFocus);
       document.removeEventListener('visibilitychange', onVisibility);

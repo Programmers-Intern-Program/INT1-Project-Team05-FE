@@ -928,10 +928,33 @@ export default function RoomDetailPage() {
         setError('로그인이 만료되었습니다. 다시 로그인해 주세요.');
         return;
       }
-      if (st === 404) {
+      // 마지막 인원 퇴장 시 방 삭제 타이밍과 겹치면 404/409가 날 수 있다.
+      if (st === 404 || st === 409) {
         clearStompChatLineAndTimer();
         router.replace('/rooms');
         return;
+      }
+      // 500은 실제 퇴장 실패일 수도 있으므로, 방 상태를 다시 확인해 안전하게 처리한다.
+      if (st === 500) {
+        try {
+          const latest = await apiFetch<RoomDetailData>(`/api/rooms/${roomIdNumber}`, { method: 'GET' });
+          const myUserId = getJwtUserId(typeof window !== 'undefined' ? localStorage.getItem('accessToken') : null);
+          const stillInRoom = myUserId != null && latest.participants.some((p) => p.userId === myUserId);
+          if (!stillInRoom) {
+            clearStompChatLineAndTimer();
+            router.replace('/rooms');
+            return;
+          }
+          setError('방 나가기에 실패했습니다. 잠시 후 다시 시도해 주세요.');
+          return;
+        } catch (verifyErr) {
+          const verifyStatus = getHttpStatus(verifyErr);
+          if (verifyStatus === 404) {
+            clearStompChatLineAndTimer();
+            router.replace('/rooms');
+            return;
+          }
+        }
       }
       setError(e instanceof Error ? e.message : '방을 나가지 못했습니다.');
     } finally {
