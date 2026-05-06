@@ -4,6 +4,7 @@ import Link from 'next/link';
 
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
+import { apiFetch } from '@/lib/api-client';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -11,10 +12,6 @@ export default function LoginPage() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-
-  // 브라우저에서 백엔드로 직접 요청하면 CORS preflight(OPTIONS)가 403으로 막힐 수 있어,
-  // Next.js API 프록시(`/api/backend/...`)를 통해 호출합니다.
-  const API_BASE_URL = '/api/backend';
 
   async function onLogin() {
     setError('');
@@ -25,31 +22,18 @@ export default function LoginPage() {
 
     setLoading(true);
     try {
-      const res = await fetch(`${API_BASE_URL}/api/auth/login`, {
+      const data = await apiFetch<{ accessToken?: string }>('/api/auth/login', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password }),
       });
 
-      const raw = await res.text();
-      let json: { msg?: string; data?: { accessToken?: string } } | null = null;
-      try {
-        json = raw ? JSON.parse(raw) : null;
-      } catch {
-        // ignore
-      }
-
-      if (!res.ok) {
-        const msg = json?.msg || raw || '로그인에 실패했습니다.';
-        throw new Error(msg);
-      }
-
-      const accessToken = json?.data?.accessToken as string | undefined;
+      const accessToken = data?.accessToken;
       if (!accessToken) {
         throw new Error('서버 응답에서 accessToken을 찾을 수 없습니다.');
       }
 
       localStorage.setItem('accessToken', accessToken);
+      window.dispatchEvent(new Event('auth-changed'));
       router.push('/rooms');
     } catch (e) {
       setError(e instanceof Error ? e.message : '로그인 중 오류가 발생했습니다.');

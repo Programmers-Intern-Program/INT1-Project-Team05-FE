@@ -4,10 +4,10 @@ function getBackendBaseUrl() {
   return process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:8080';
 }
 
-function buildBackendUrl(pathParts: string[]) {
+function buildBackendUrl(pathParts: string[], search = '') {
   const path = pathParts.join('/');
   const base = getBackendBaseUrl();
-  return `${base}/${path}`;
+  return `${base}/${path}${search}`;
 }
 
 function filterForwardHeaders(headers: Headers) {
@@ -24,7 +24,7 @@ export async function GET(
 ) {
   const { path } = await context.params;
   const pathParts = path ?? [];
-  const url = buildBackendUrl(pathParts);
+  const url = buildBackendUrl(pathParts, req.nextUrl.search);
 
   const res = await fetch(url, {
     method: 'GET',
@@ -43,7 +43,7 @@ export async function POST(
 ) {
   const { path } = await context.params;
   const pathParts = path ?? [];
-  const url = buildBackendUrl(pathParts);
+  const url = buildBackendUrl(pathParts, req.nextUrl.search);
 
   const body = await req.arrayBuffer();
 
@@ -53,6 +53,74 @@ export async function POST(
 
   const res = await fetch(url, {
     method: 'POST',
+    headers,
+    body,
+  });
+
+  return new NextResponse(await res.arrayBuffer(), {
+    status: res.status,
+    headers: res.headers,
+  });
+}
+
+export async function DELETE(
+  req: NextRequest,
+  context: { params: Promise<{ path?: string[] }> },
+) {
+  const { path } = await context.params;
+  const pathParts = path ?? [];
+  const url = buildBackendUrl(pathParts, req.nextUrl.search);
+
+  const headers = new Headers(req.headers);
+  filterForwardHeaders(headers);
+
+  const res = await fetch(url, {
+    method: 'DELETE',
+    headers,
+  });
+
+  return new NextResponse(await res.arrayBuffer(), {
+    status: res.status,
+    headers: res.headers,
+  });
+}
+
+export async function PUT(
+  req: NextRequest,
+  context: { params: Promise<{ path?: string[] }> },
+) {
+  const { path } = await context.params;
+  const pathParts = path ?? [];
+  const url = buildBackendUrl(pathParts, req.nextUrl.search);
+  const body = await req.arrayBuffer();
+  const headers = new Headers(req.headers);
+  filterForwardHeaders(headers);
+
+  const res = await fetch(url, {
+    method: 'PUT',
+    headers,
+    body,
+  });
+
+  return new NextResponse(await res.arrayBuffer(), {
+    status: res.status,
+    headers: res.headers,
+  });
+}
+
+export async function PATCH(
+  req: NextRequest,
+  context: { params: Promise<{ path?: string[] }> },
+) {
+  const { path } = await context.params;
+  const pathParts = path ?? [];
+  const url = buildBackendUrl(pathParts, req.nextUrl.search);
+  const body = await req.arrayBuffer();
+  const headers = new Headers(req.headers);
+  filterForwardHeaders(headers);
+
+  const res = await fetch(url, {
+    method: 'PATCH',
     headers,
     body,
   });

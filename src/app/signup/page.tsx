@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
+import { apiFetch } from '@/lib/api-client';
 
 export default function SignupPage() {
   const router = useRouter();
@@ -13,10 +14,6 @@ export default function SignupPage() {
 
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-
-  // 브라우저에서 백엔드로 직접 요청하면 CORS preflight(OPTIONS)가 403으로 막힐 수 있어,
-  // Next.js API 프록시(`/api/backend/...`)로 호출합니다.
-  const API_BASE_URL = '/api/backend';
 
   async function onSignup() {
     setError('');
@@ -36,24 +33,10 @@ export default function SignupPage() {
 
     setLoading(true);
     try {
-      const res = await fetch(`${API_BASE_URL}/api/auth/signup`, {
+      await apiFetch<unknown>('/api/auth/signup', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: normalizedEmail, password, nickname: normalizedNickname }),
       });
-
-      const raw = await res.text();
-      let json: { msg?: string; data?: unknown } | null = null;
-      try {
-        json = raw ? JSON.parse(raw) : null;
-      } catch {
-        // ignore - raw text already available
-      }
-
-      if (!res.ok) {
-        const msg = json?.msg || raw || '회원가입에 실패했습니다.';
-        throw new Error(msg);
-      }
 
       // 성공: data는 userId (number)
       router.push('/login');

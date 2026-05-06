@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 
 export default function PlayerChatBubble({
   text,
-  durationMs = 2600,
+  durationMs = 4000,
 }: {
   text?: string;
   durationMs?: number;

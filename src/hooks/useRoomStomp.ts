@@ -2,7 +2,7 @@
 
 import { Client, type IMessage } from '@stomp/stompjs';
 import SockJS from 'sockjs-client';
-import { useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 export type RoomStompDestination = 'room' | 'chat';
 
@@ -22,6 +22,8 @@ export function useRoomStomp(
   onPayload: (dest: RoomStompDestination, body: unknown) => void,
 ) {
   const onPayloadRef = useRef(onPayload);
+  const clientRef = useRef<Client | null>(null);
+  const [connected, setConnected] = useState(false);
   useEffect(() => {
     onPayloadRef.current = onPayload;
   }, [onPayload]);
@@ -36,6 +38,7 @@ export function useRoomStomp(
       webSocketFactory: () => new SockJS(sockJsUrl()) as unknown as WebSocket,
       connectHeaders: { Authorization: `Bearer ${token}` },
       onConnect: () => {
+        setConnected(true);
         client.subscribe(`/sub/rooms/${roomId}`, (message: IMessage) => {
           let body: unknown = message.body;
           try {
@@ -56,17 +59,41 @@ export function useRoomStomp(
         });
       },
       onStompError: (frame) => {
+        setConnected(false);
         console.warn('[STOMP]', frame.headers?.message ?? frame.body);
       },
       onWebSocketError: () => {
+        setConnected(false);
         console.warn('[STOMP] websocket error');
+      },
+      onWebSocketClose: () => {
+        setConnected(false);
       },
     });
 
+    clientRef.current = client;
     client.activate();
 
     return () => {
+      setConnected(false);
+      clientRef.current = null;
       void client.deactivate();
     };
   }, [roomId, enabled, token]);
+
+  const publishChat = useCallback(
+    (message: string) => {
+      const client = clientRef.current;
+      const trimmed = message.trim();
+      if (!client || !connected || !trimmed) return false;
+      client.publish({
+        destination: `/pub/rooms/${roomId}/chat`,
+        body: JSON.stringify({ message: trimmed }),
+      });
+      return true;
+    },
+    [connected, roomId],
+  );
+
+  return { connected, publishChat };
 }
