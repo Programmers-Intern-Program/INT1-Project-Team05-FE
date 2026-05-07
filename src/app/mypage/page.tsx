@@ -184,9 +184,11 @@ export default function MyPage() {
             <section className="rounded-2xl border border-white/10 bg-white/[0.04] p-6">
               <h2 className="text-xl font-bold">프로필</h2>
               <div className="mt-4 space-y-4">
-                <p className="text-sm text-slate-300">
-                  이메일 <span className="ml-2 font-semibold text-white">{user.email}</span>
-                </p>
+                {!user.isGuest ? (
+                  <p className="text-sm text-slate-300">
+                    이메일 <span className="ml-2 font-semibold text-white">{user.email}</span>
+                  </p>
+                ) : null}
                 <div className="rounded-xl border border-white/10 bg-slate-900/50 px-4 py-3">
                   <p className="text-xs font-semibold text-slate-400">현재 닉네임</p>
                   <p className="mt-1 text-lg font-black text-white">{user.nickname}</p>
@@ -256,70 +258,76 @@ export default function MyPage() {
               </div>
             </section>
 
-            <section className="rounded-2xl border border-white/10 bg-white/[0.04] p-6 lg:col-span-2">
-              <h2 className="text-xl font-bold">비밀번호 변경</h2>
-              <div className="mt-4 space-y-3">
-                <label className="block">
-                  <span className="mb-1 block text-xs font-semibold text-slate-300">현재 비밀번호</span>
-                  <input
-                    type="password"
-                    value={currentPassword}
-                    onChange={(e) => setCurrentPassword(e.target.value)}
-                    className="w-full rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 outline-none"
-                    placeholder="현재 비밀번호"
-                    disabled={user.isGuest}
-                  />
-                </label>
-                <label className="block">
-                  <span className="mb-1 block text-xs font-semibold text-slate-300">새 비밀번호</span>
-                  <input
-                    type="password"
-                    value={newPassword}
-                    onChange={(e) => setNewPassword(e.target.value)}
-                    className="w-full rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 outline-none"
-                    placeholder="8~20자"
-                    disabled={user.isGuest}
-                  />
-                </label>
-                <label className="block">
-                  <span className="mb-1 block text-xs font-semibold text-slate-300">새 비밀번호 확인</span>
-                  <input
-                    type="password"
-                    value={newPasswordConfirm}
-                    onChange={(e) => setNewPasswordConfirm(e.target.value)}
-                    className="w-full rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 outline-none"
-                    placeholder="새 비밀번호 재입력"
-                    disabled={user.isGuest}
-                  />
-                </label>
-              </div>
-              <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <p className="text-xs text-slate-400">
-                  {user.isGuest ? '게스트 계정은 비밀번호 변경을 지원하지 않습니다.' : '비밀번호는 8자 이상 20자 이하입니다.'}
+            {!user.isGuest ? (
+              <section className="rounded-2xl border border-white/10 bg-white/[0.04] p-6 lg:col-span-2">
+                <h2 className="text-xl font-bold">비밀번호 변경</h2>
+                <div className="mt-4 space-y-3">
+                  <label className="block">
+                    <span className="mb-1 block text-xs font-semibold text-slate-300">현재 비밀번호</span>
+                    <input
+                      type="password"
+                      value={currentPassword}
+                      onChange={(e) => setCurrentPassword(e.target.value)}
+                      className="w-full rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 outline-none"
+                      placeholder="현재 비밀번호"
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="mb-1 block text-xs font-semibold text-slate-300">새 비밀번호</span>
+                    <input
+                      type="password"
+                      value={newPassword}
+                      onChange={(e) => setNewPassword(e.target.value)}
+                      className="w-full rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 outline-none"
+                      placeholder="8~20자"
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="mb-1 block text-xs font-semibold text-slate-300">새 비밀번호 확인</span>
+                    <input
+                      type="password"
+                      value={newPasswordConfirm}
+                      onChange={(e) => setNewPasswordConfirm(e.target.value)}
+                      className="w-full rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 outline-none"
+                      placeholder="새 비밀번호 재입력"
+                    />
+                  </label>
+                </div>
+                <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <p className="text-xs text-slate-400">비밀번호는 8자 이상 20자 이하입니다.</p>
+                  <button
+                    type="button"
+                    onClick={() => void handleChangePassword()}
+                    disabled={changingPassword}
+                    className="rounded-xl border border-white/20 px-4 py-2 font-semibold disabled:opacity-60"
+                  >
+                    {changingPassword ? '변경 중...' : '비밀번호 변경'}
+                  </button>
+                </div>
+              </section>
+            ) : null}
+
+            {user.isGuest ? (
+              <section className="rounded-2xl border border-white/10 bg-white/[0.04] p-6 lg:col-span-2">
+                <h2 className="text-xl font-bold">게스트 세션</h2>
+                <p className="mt-2 text-sm text-slate-300">
+                  게스트 계정은 임시 계정입니다. 현재 세션을 종료하려면 우측 상단 로그아웃을 이용해 주세요.
                 </p>
+              </section>
+            ) : (
+              <section className="rounded-2xl border border-rose-500/30 bg-rose-500/10 p-6 lg:col-span-2">
+                <h2 className="text-xl font-bold text-rose-200">회원 탈퇴</h2>
+                <p className="mt-2 text-sm text-rose-100/90">탈퇴 시 계정 정보는 복구할 수 없습니다.</p>
                 <button
                   type="button"
-                  onClick={() => void handleChangePassword()}
-                  disabled={changingPassword || user.isGuest}
-                  className="rounded-xl border border-white/20 px-4 py-2 font-semibold disabled:opacity-60"
+                  onClick={() => void handleDeleteAccount()}
+                  disabled={deleting}
+                  className="mt-4 rounded-xl bg-rose-500 px-4 py-2 font-bold text-white disabled:opacity-60"
                 >
-                  {changingPassword ? '변경 중...' : '비밀번호 변경'}
+                  {deleting ? '탈퇴 처리 중...' : '회원 탈퇴'}
                 </button>
-              </div>
-            </section>
-
-            <section className="rounded-2xl border border-rose-500/30 bg-rose-500/10 p-6 lg:col-span-2">
-              <h2 className="text-xl font-bold text-rose-200">회원 탈퇴</h2>
-              <p className="mt-2 text-sm text-rose-100/90">탈퇴 시 계정 정보는 복구할 수 없습니다.</p>
-              <button
-                type="button"
-                onClick={() => void handleDeleteAccount()}
-                disabled={deleting}
-                className="mt-4 rounded-xl bg-rose-500 px-4 py-2 font-bold text-white disabled:opacity-60"
-              >
-                {deleting ? '탈퇴 처리 중...' : '회원 탈퇴'}
-              </button>
-            </section>
+              </section>
+            )}
           </div>
         ) : null}
       </section>

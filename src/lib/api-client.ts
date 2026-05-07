@@ -94,6 +94,10 @@ type RequestOptions = {
 };
 
 async function requestWithAuth<T>(path: string, init: RequestInit | undefined, options: RequestOptions): Promise<T> {
+  const isPublicAuthPath =
+    path.startsWith('/api/auth/login') ||
+    path.startsWith('/api/auth/guest') ||
+    path.startsWith('/api/auth/reissue');
   const token = options.accessTokenOverride ?? getAccessToken();
   const isFormData = init?.body instanceof FormData;
   const headers = new Headers(init?.headers);
@@ -101,7 +105,7 @@ async function requestWithAuth<T>(path: string, init: RequestInit | undefined, o
   if (!isFormData && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json');
   }
-  if (token && !headers.has('Authorization')) {
+  if (!isPublicAuthPath && token && !headers.has('Authorization')) {
     headers.set('Authorization', `Bearer ${token}`);
   }
 
@@ -114,7 +118,10 @@ async function requestWithAuth<T>(path: string, init: RequestInit | undefined, o
   const { json, text } = await parseResponse<T>(response);
 
   if (!response.ok && options.allowReissue && (response.status === 401 || response.status === 403)) {
-    const shouldSkipReissue = path.startsWith('/api/auth/login') || path.startsWith('/api/auth/reissue');
+    const shouldSkipReissue =
+      path.startsWith('/api/auth/login') ||
+      path.startsWith('/api/auth/guest') ||
+      path.startsWith('/api/auth/reissue');
     if (!shouldSkipReissue) {
       const newAccessToken = await reissueAccessToken();
       if (newAccessToken) {

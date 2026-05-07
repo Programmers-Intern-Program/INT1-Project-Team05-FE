@@ -13,6 +13,33 @@ export default function LoginPage() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [guestLoading, setGuestLoading] = useState(false);
+
+  function completeLogin(
+    tokens: { accessToken?: string; refreshToken?: string },
+    options?: { requireRefreshToken?: boolean },
+  ) {
+    const requireRefreshToken = options?.requireRefreshToken ?? true;
+    const accessToken = tokens?.accessToken;
+    const refreshToken = tokens?.refreshToken;
+    if (!accessToken) {
+      throw new Error('서버 응답에서 accessToken을 찾을 수 없습니다.');
+    }
+    if (requireRefreshToken && !refreshToken) {
+      throw new Error('서버 응답에서 refreshToken을 찾을 수 없습니다.');
+    }
+
+    localStorage.setItem('accessToken', accessToken);
+    if (refreshToken) {
+      localStorage.setItem('refreshToken', refreshToken);
+    } else {
+      localStorage.removeItem('refreshToken');
+    }
+    window.dispatchEvent(new Event('auth-changed'));
+    const redirect = searchParams.get('redirect');
+    const safeRedirect = redirect && redirect.startsWith('/') ? redirect : '/rooms';
+    router.push(safeRedirect);
+  }
 
   async function onLogin() {
     setError('');
@@ -27,26 +54,26 @@ export default function LoginPage() {
         method: 'POST',
         body: JSON.stringify({ email, password }),
       });
-
-      const accessToken = data?.accessToken;
-      const refreshToken = data?.refreshToken;
-      if (!accessToken) {
-        throw new Error('서버 응답에서 accessToken을 찾을 수 없습니다.');
-      }
-      if (!refreshToken) {
-        throw new Error('서버 응답에서 refreshToken을 찾을 수 없습니다.');
-      }
-
-      localStorage.setItem('accessToken', accessToken);
-      localStorage.setItem('refreshToken', refreshToken);
-      window.dispatchEvent(new Event('auth-changed'));
-      const redirect = searchParams.get('redirect');
-      const safeRedirect = redirect && redirect.startsWith('/') ? redirect : '/rooms';
-      router.push(safeRedirect);
+      completeLogin(data);
     } catch (e) {
       setError(e instanceof Error ? e.message : '로그인 중 오류가 발생했습니다.');
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function onGuestLogin() {
+    setError('');
+    setGuestLoading(true);
+    try {
+      const data = await apiFetch<{ accessToken?: string; refreshToken?: string }>('/api/auth/guest', {
+        method: 'POST',
+      });
+      completeLogin(data, { requireRefreshToken: false });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '게스트 로그인 중 오류가 발생했습니다.');
+    } finally {
+      setGuestLoading(false);
     }
   }
 
@@ -93,11 +120,28 @@ export default function LoginPage() {
 
             <button
               type="submit"
-              disabled={loading}
+              disabled={loading || guestLoading}
               className="w-full rounded-xl bg-gradient-to-r from-blue-500 to-violet-500 px-4 py-3 font-semibold text-white shadow-lg shadow-blue-500/30 transition hover:from-blue-400 hover:to-violet-400 disabled:opacity-60"
             >
               {loading ? '로그인 중...' : '로그인'}
             </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                void onGuestLogin();
+              }}
+              disabled={loading || guestLoading}
+              className="w-full rounded-xl border border-white/15 bg-white/5 px-4 py-3 font-semibold text-white transition hover:bg-white/10 disabled:opacity-60"
+            >
+              {guestLoading ? '게스트 로그인 중... (닉네임 생성 중)' : '게스트로 시작하기'}
+            </button>
+
+            {guestLoading ? (
+              <p className="text-center text-xs text-slate-400">
+                AI가 게스트 닉네임을 생성하고 있어요. 최대 수 초 정도 걸릴 수 있습니다.
+              </p>
+            ) : null}
 
             {error && <p className="text-center text-sm text-rose-300">{error}</p>}
           </form>
