@@ -194,24 +194,30 @@ export default function MyPage() {
                   <p className="mt-1 text-lg font-black text-white">{user.nickname}</p>
                 </div>
 
-                <label className="block">
-                  <span className="mb-1 block text-sm text-slate-300">새 닉네임</span>
-                  <input
-                    value={nextNickname}
-                    onChange={(e) => setNextNickname(e.target.value)}
-                    className="w-full rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 outline-none"
-                    placeholder="변경할 닉네임 입력"
-                    maxLength={20}
-                  />
-                </label>
-                <button
-                  type="button"
-                  onClick={() => void handleSaveProfile()}
-                  disabled={saving || !nextNickname.trim()}
-                  className="rounded-xl bg-gradient-to-r from-blue-500 to-violet-500 px-4 py-2 font-bold disabled:opacity-60"
-                >
-                  {saving ? '변경 중...' : '닉네임 변경'}
-                </button>
+                {!user.isGuest ? (
+                  <>
+                    <label className="block">
+                      <span className="mb-1 block text-sm text-slate-300">새 닉네임</span>
+                      <input
+                        value={nextNickname}
+                        onChange={(e) => setNextNickname(e.target.value)}
+                        className="w-full rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 outline-none"
+                        placeholder="변경할 닉네임 입력"
+                        maxLength={20}
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => void handleSaveProfile()}
+                      disabled={saving || !nextNickname.trim()}
+                      className="rounded-xl bg-gradient-to-r from-blue-500 to-violet-500 px-4 py-2 font-bold disabled:opacity-60"
+                    >
+                      {saving ? '변경 중...' : '닉네임 변경'}
+                    </button>
+                  </>
+                ) : (
+                  <p className="text-xs text-slate-400">게스트 계정은 닉네임 변경을 지원하지 않습니다.</p>
+                )}
               </div>
             </section>
 

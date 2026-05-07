@@ -48,6 +48,8 @@ type RoomDetailParticipant = {
 
 type RoomDetailData = {
   roomId: number;
+  curPlayers: number;
+  maxPlayers: number;
   participants: RoomDetailParticipant[];
   /** Jackson에 따라 `playing`으로 올 수 있음 */
   isPlaying?: boolean;
@@ -191,6 +193,107 @@ type FinalRankingBoardState = {
   rows: FinalRankingRow[];
   fetchError?: string;
 };
+
+type QuickDrawStroke = [number[], number[]];
+
+function isQuickDrawStrokeArray(value: unknown): value is QuickDrawStroke[] {
+  if (!Array.isArray(value)) return false;
+  return value.every((stroke) => {
+    if (!Array.isArray(stroke) || stroke.length < 2) return false;
+    const [xs, ys] = stroke;
+    return Array.isArray(xs) && Array.isArray(ys);
+  });
+}
+
+function quickDrawToDataUrl(strokes: QuickDrawStroke[]): string | null {
+  if (typeof document === 'undefined') return null;
+  const size = 512;
+  const padding = 24;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return null;
+
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, size, size);
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.strokeStyle = '#111827';
+  ctx.lineWidth = 6;
+
+  let minX = Number.POSITIVE_INFINITY;
+  let minY = Number.POSITIVE_INFINITY;
+  let maxX = Number.NEGATIVE_INFINITY;
+  let maxY = Number.NEGATIVE_INFINITY;
+
+  for (const [xs, ys] of strokes) {
+    const len = Math.min(xs.length, ys.length);
+    for (let i = 0; i < len; i++) {
+      const x = Number(xs[i]);
+      const y = Number(ys[i]);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+      if (x < minX) minX = x;
+      if (y < minY) minY = y;
+      if (x > maxX) maxX = x;
+      if (y > maxY) maxY = y;
+    }
+  }
+
+  if (!Number.isFinite(minX) || !Number.isFinite(minY) || !Number.isFinite(maxX) || !Number.isFinite(maxY)) {
+    return null;
+  }
+
+  const srcW = Math.max(1, maxX - minX);
+  const srcH = Math.max(1, maxY - minY);
+  const scale = Math.min((size - padding * 2) / srcW, (size - padding * 2) / srcH);
+  const offsetX = (size - srcW * scale) / 2;
+  const offsetY = (size - srcH * scale) / 2;
+
+  const mapPoint = (x: number, y: number) => ({
+    x: (x - minX) * scale + offsetX,
+    y: (y - minY) * scale + offsetY,
+  });
+
+  for (const [xs, ys] of strokes) {
+    const len = Math.min(xs.length, ys.length);
+    if (len <= 0) continue;
+    let started = false;
+    ctx.beginPath();
+    for (let i = 0; i < len; i++) {
+      const x = Number(xs[i]);
+      const y = Number(ys[i]);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+      const p = mapPoint(x, y);
+      if (!started) {
+        ctx.moveTo(p.x, p.y);
+        started = true;
+      } else {
+        ctx.lineTo(p.x, p.y);
+      }
+    }
+    if (started) ctx.stroke();
+  }
+
+  return canvas.toDataURL('image/png');
+}
+
+function resolveSubmissionImageSrc(raw: string): string | null {
+  const value = raw.trim();
+  if (!value) return null;
+  if (value.startsWith('data:image')) return value;
+  if (value.startsWith('http://') || value.startsWith('https://') || value.startsWith('blob:')) return value;
+
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (isQuickDrawStrokeArray(parsed)) {
+      return quickDrawToDataUrl(parsed);
+    }
+  } catch {
+    // quickdraw JSON이 아니면 표시 불가
+  }
+  return null;
+}
 
 function normalizeRankingRow(raw: unknown): FinalRankingRow | null {
   if (!raw || typeof raw !== 'object') return null;
@@ -405,6 +508,7 @@ export default function RoomDetailPage() {
   const [participantId, setParticipantId] = useState<string>('');
   const [roundInfo, setRoundInfo] = useState<RoundStartData | CurrentRoundData | null>(null);
   const [submitInfo, setSubmitInfo] = useState<SubmitDrawingData | null>(null);
+  const [roomCapacity, setRoomCapacity] = useState<{ curPlayers: number; maxPlayers: number } | null>(null);
   const [loadingStart, setLoadingStart] = useState(false);
   const [loadingSubmit, setLoadingSubmit] = useState(false);
   const [loadingAiAction, setLoadingAiAction] = useState(false);
@@ -445,6 +549,7 @@ export default function RoomDetailPage() {
     if (!roomIdNumber) return;
     try {
       const latest = await apiFetch<RoomDetailData>(`/api/rooms/${roomIdNumber}`);
+      setRoomCapacity({ curPlayers: latest.curPlayers, maxPlayers: latest.maxPlayers });
       if (roomIsPlaying(latest)) {
         try {
           const dataRaw = await apiFetch<CurrentRoundDataJson>(`/api/rooms/${roomIdNumber}/rounds/current`);
@@ -797,6 +902,7 @@ export default function RoomDetailPage() {
         // 1) 먼저 방 상세를 가져와서, 이미 내가 참여자인지 확인
         //    (방 생성 시 호스트는 백엔드가 이미 Participant로 넣어주기 때문에 join을 또 호출하면 중복이 생길 수 있음)
         const roomDetail = await apiFetch<RoomDetailData>(`/api/rooms/${roomIdNumber}`);
+        setRoomCapacity({ curPlayers: roomDetail.curPlayers, maxPlayers: roomDetail.maxPlayers });
         if (isStale()) return;
 
         const myUserId = getJwtUserId(localStorage.getItem('accessToken'));
@@ -830,6 +936,7 @@ export default function RoomDetailPage() {
 
         // 3) 최신 방 상세 — 게임 중이면 현재 라운드까지 불러와 HUD·제출 표시 복원
         const latest = await apiFetch<RoomDetailData>(`/api/rooms/${roomIdNumber}`);
+        setRoomCapacity({ curPlayers: latest.curPlayers, maxPlayers: latest.maxPlayers });
         if (isStale()) return;
 
         if (roomIsPlaying(latest)) {
@@ -915,6 +1022,7 @@ export default function RoomDetailPage() {
   const myPlayer = myUserId != null ? players.find((p) => p.userId === myUserId) : undefined;
   const isMyHost = Boolean(myPlayer?.isHost);
   const hasAiPlayer = players.some((p) => p.isAi);
+  const canAddAi = roomCapacity ? roomCapacity.curPlayers < roomCapacity.maxPlayers : true;
   const isRoomInProgress = roundInfo?.status === 'IN_PROGRESS' && !submitInfo?.gameFinished;
 
   /** 에러·AI 결과만 (버튼/초기화와 무관하게 유지) */
@@ -966,6 +1074,13 @@ export default function RoomDetailPage() {
           const myUserId = getJwtUserId(typeof window !== 'undefined' ? localStorage.getItem('accessToken') : null);
           const stillInRoom = myUserId != null && latest.participants.some((p) => p.userId === myUserId);
           if (!stillInRoom) {
+            clearStompChatLineAndTimer();
+            router.replace('/rooms');
+            return;
+          }
+          // 백엔드에서 AI 포함/게임 진행 중 leave 처리 시 간헐적 500이 발생하는 케이스 완화:
+          // 실제로는 방 화면 이탈이 우선이므로 로비로 먼저 이동시킨다.
+          if (isRoomInProgress || hasAiPlayer) {
             clearStompChatLineAndTimer();
             router.replace('/rooms');
             return;
@@ -1143,7 +1258,9 @@ export default function RoomDetailPage() {
           submitLabel={submitLabel}
           isMyHost={isMyHost}
           hasAiPlayer={hasAiPlayer}
-          aiActionDisabled={loadingAiAction || leavingRoom || loadingStart || isRoomInProgress}
+          aiActionDisabled={
+            loadingAiAction || leavingRoom || loadingStart || isRoomInProgress || (!hasAiPlayer && !canAddAi)
+          }
           onAddAi={handleAddAiPlayer}
           onRemoveAi={handleRemoveAiPlayer}
           loadingAiAction={loadingAiAction}
@@ -1246,6 +1363,9 @@ function RoundEndScoreboardOverlay({
         ) : (
           <div className="grid gap-4 sm:grid-cols-2">
             {board.items.map((item) => (
+              (() => {
+                const imageSrc = resolveSubmissionImageSrc(item.imageData);
+                return (
               <div
                 key={item.participantId}
                 className={`overflow-hidden rounded-2xl border bg-slate-950/60 shadow-lg ${
@@ -1261,9 +1381,9 @@ function RoundEndScoreboardOverlay({
                   </span>
                 </div>
                 <div className="relative aspect-square w-full bg-white">
-                  {item.imageData ? (
+                  {imageSrc ? (
                     <img
-                      src={item.imageData}
+                      src={imageSrc}
                       alt={`${item.nickname} 제출`}
                       className="h-full w-full object-contain"
                     />
@@ -1280,6 +1400,8 @@ function RoundEndScoreboardOverlay({
                   </p>
                 ) : null}
               </div>
+                );
+              })()
             ))}
           </div>
         )}
