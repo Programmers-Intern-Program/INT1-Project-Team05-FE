@@ -2,12 +2,13 @@
 
 import Link from 'next/link';
 
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useState } from 'react';
 import { apiFetch } from '@/lib/api-client';
 
 export default function LoginPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
@@ -22,19 +23,26 @@ export default function LoginPage() {
 
     setLoading(true);
     try {
-      const data = await apiFetch<{ accessToken?: string }>('/api/auth/login', {
+      const data = await apiFetch<{ accessToken?: string; refreshToken?: string }>('/api/auth/login', {
         method: 'POST',
         body: JSON.stringify({ email, password }),
       });
 
       const accessToken = data?.accessToken;
+      const refreshToken = data?.refreshToken;
       if (!accessToken) {
         throw new Error('서버 응답에서 accessToken을 찾을 수 없습니다.');
       }
+      if (!refreshToken) {
+        throw new Error('서버 응답에서 refreshToken을 찾을 수 없습니다.');
+      }
 
       localStorage.setItem('accessToken', accessToken);
+      localStorage.setItem('refreshToken', refreshToken);
       window.dispatchEvent(new Event('auth-changed'));
-      router.push('/rooms');
+      const redirect = searchParams.get('redirect');
+      const safeRedirect = redirect && redirect.startsWith('/') ? redirect : '/rooms';
+      router.push(safeRedirect);
     } catch (e) {
       setError(e instanceof Error ? e.message : '로그인 중 오류가 발생했습니다.');
     } finally {

@@ -6,6 +6,7 @@ import {
   useEffect,
   useImperativeHandle,
   useRef,
+  useState,
   type PointerEvent,
 } from 'react';
 
@@ -15,12 +16,17 @@ export type DrawingCanvasHandle = {
   toDataUrl: () => string;
   clear: () => void;
   getHasDrawing: () => boolean;
+  undo: () => void;
+  redo: () => void;
+  canUndo: () => boolean;
+  canRedo: () => boolean;
 };
 
 type DrawingCanvasProps = {
   strokeColor: string;
   lineWidth: number;
   isEraser: boolean;
+  strokeOpacity?: number;
   className?: string;
 };
 
@@ -34,12 +40,31 @@ function getPointerPos(canvas: HTMLCanvasElement, clientX: number, clientY: numb
   };
 }
 
+function getPointerPosCss(canvas: HTMLCanvasElement, clientX: number, clientY: number) {
+  const rect = canvas.getBoundingClientRect();
+  return {
+    x: clientX - rect.left,
+    y: clientY - rect.top,
+  };
+}
+
 export const DrawingCanvas = forwardRef<DrawingCanvasHandle, DrawingCanvasProps>(
-  function DrawingCanvas({ strokeColor, lineWidth, isEraser, className }, ref) {
+  function DrawingCanvas({ strokeColor, lineWidth, isEraser, strokeOpacity = 1, className }, ref) {
+    const isHighlighter = !isEraser && strokeOpacity < 0.95;
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const isDrawing = useRef(false);
     const lastPoint = useRef<{ x: number; y: number } | null>(null);
     const strokeCount = useRef(0);
+    const strokeDirty = useRef(false);
+    const historyRef = useRef<string[]>([]);
+    const redoRef = useRef<string[]>([]);
+    const isRestoring = useRef(false);
+    const rafRef = useRef<number | null>(null);
+    const [cursor, setCursor] = useState<{ x: number; y: number; visible: boolean }>({
+      x: 0,
+      y: 0,
+      visible: false,
+    });
 
     const fillWhite = useCallback(() => {
       const canvas = canvasRef.current;
@@ -50,6 +75,44 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandle, DrawingCanvasProps>
       ctx.fillRect(0, 0, canvas.width, canvas.height);
     }, []);
 
+    const snapshot = useCallback(() => {
+      const canvas = canvasRef.current;
+      if (!canvas) return '';
+      return canvas.toDataURL('image/png');
+    }, []);
+
+    const restoreFromDataUrl = useCallback(
+      (dataUrl: string) => {
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+        const img = new Image();
+        isRestoring.current = true;
+        img.onload = () => {
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          isRestoring.current = false;
+        };
+        img.onerror = () => {
+          isRestoring.current = false;
+        };
+        img.src = dataUrl;
+      },
+      [],
+    );
+
+    const pushHistory = useCallback(() => {
+      if (isRestoring.current) return;
+      const url = snapshot();
+      if (!url) return;
+      const history = historyRef.current;
+      if (history.length > 0 && history[history.length - 1] === url) return;
+      history.push(url);
+      if (history.length > 60) history.shift();
+      redoRef.current = [];
+    }, [snapshot]);
+
     useEffect(() => {
       const canvas = canvasRef.current;
       if (!canvas) return;
@@ -57,6 +120,9 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandle, DrawingCanvasProps>
       canvas.height = CANVAS_SIZE;
       fillWhite();
       strokeCount.current = 0;
+      historyRef.current = [];
+      redoRef.current = [];
+      pushHistory();
     }, [fillWhite]);
 
     const paintStroke = useCallback(
@@ -73,11 +139,13 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandle, DrawingCanvasProps>
         ctx.lineWidth = isEraser ? lineWidth * 2.5 : lineWidth;
         ctx.lineCap = 'round';
         ctx.lineJoin = 'round';
+        ctx.globalAlpha = isEraser ? 1 : strokeOpacity;
         ctx.stroke();
         ctx.restore();
         strokeCount.current += 1;
+        strokeDirty.current = true;
       },
-      [isEraser, lineWidth, strokeColor],
+      [isEraser, lineWidth, strokeColor, strokeOpacity],
     );
 
     const paintDot = useCallback(
@@ -90,10 +158,12 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandle, DrawingCanvasProps>
         ctx.beginPath();
         ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
         ctx.fillStyle = isEraser ? '#ffffff' : strokeColor;
+        ctx.globalAlpha = isEraser ? 1 : strokeOpacity;
         ctx.fill();
         strokeCount.current += 1;
+        strokeDirty.current = true;
       },
-      [isEraser, lineWidth, strokeColor],
+      [isEraser, lineWidth, strokeColor, strokeOpacity],
     );
 
     useImperativeHandle(ref, () => ({
@@ -101,8 +171,30 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandle, DrawingCanvasProps>
       clear: () => {
         fillWhite();
         strokeCount.current = 0;
+        strokeDirty.current = false;
+        historyRef.current = [];
+        redoRef.current = [];
+        pushHistory();
       },
-      getHasDrawing: () => strokeCount.current > 0,
+      getHasDrawing: () => strokeCount.current > 0 || historyRef.current.length > 1,
+      undo: () => {
+        const history = historyRef.current;
+        if (history.length <= 1) return;
+        const last = history.pop();
+        if (last) redoRef.current.unshift(last);
+        const prev = history[history.length - 1];
+        if (prev) restoreFromDataUrl(prev);
+        strokeCount.current = history.length <= 1 ? 0 : 1;
+      },
+      redo: () => {
+        const next = redoRef.current.shift();
+        if (!next) return;
+        historyRef.current.push(next);
+        restoreFromDataUrl(next);
+        strokeCount.current = 1;
+      },
+      canUndo: () => historyRef.current.length > 1,
+      canRedo: () => redoRef.current.length > 0,
     }));
 
     const onPointerDown = (e: PointerEvent<HTMLCanvasElement>) => {
@@ -111,17 +203,26 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandle, DrawingCanvasProps>
       e.preventDefault();
       canvas.setPointerCapture(e.pointerId);
       isDrawing.current = true;
+      strokeDirty.current = false;
+      const pCss = getPointerPosCss(canvas, e.clientX, e.clientY);
+      setCursor({ x: pCss.x, y: pCss.y, visible: true });
       const p = getPointerPos(canvas, e.clientX, e.clientY);
       lastPoint.current = p;
       paintDot(p);
     };
 
     const onPointerMove = (e: PointerEvent<HTMLCanvasElement>) => {
-      if (!isDrawing.current || !lastPoint.current) return;
       const canvas = canvasRef.current;
       if (!canvas) return;
       e.preventDefault();
+      const pCss = getPointerPosCss(canvas, e.clientX, e.clientY);
       const p = getPointerPos(canvas, e.clientX, e.clientY);
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      rafRef.current = requestAnimationFrame(() => {
+        setCursor({ x: pCss.x, y: pCss.y, visible: true });
+      });
+
+      if (!isDrawing.current || !lastPoint.current) return;
       paintStroke(lastPoint.current, p);
       lastPoint.current = p;
     };
@@ -129,26 +230,69 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandle, DrawingCanvasProps>
     const endStroke = () => {
       isDrawing.current = false;
       lastPoint.current = null;
+      if (strokeDirty.current) {
+        pushHistory();
+        strokeDirty.current = false;
+      }
     };
 
     return (
-      <canvas
-        ref={canvasRef}
+      <div
         className={[
-          'aspect-square w-[min(88vw,min(34svh,300px))] max-w-full touch-none rounded-xl bg-white sm:w-[min(88vw,min(38svh,340px))]',
+          'relative aspect-square w-[min(88vw,min(34svh,300px))] max-w-full touch-none rounded-xl bg-white sm:w-[min(88vw,min(38svh,340px))]',
           className,
         ]
           .filter(Boolean)
           .join(' ')}
-        style={{ cursor: 'crosshair' }}
-        onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={endStroke}
-        onPointerCancel={endStroke}
-        onPointerLeave={(e: PointerEvent<HTMLCanvasElement>) => {
-          if (e.buttons === 0) endStroke();
-        }}
-      />
+      >
+        <canvas
+          ref={canvasRef}
+          className="h-full w-full rounded-xl"
+          style={{ cursor: 'none' }}
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={() => {
+            endStroke();
+            setCursor((prev) => ({ ...prev, visible: true }));
+          }}
+          onPointerCancel={() => {
+            endStroke();
+            setCursor((prev) => ({ ...prev, visible: false }));
+          }}
+          onPointerLeave={(e: PointerEvent<HTMLCanvasElement>) => {
+            if (e.buttons === 0) endStroke();
+            setCursor((prev) => ({ ...prev, visible: false }));
+          }}
+        />
+        {cursor.visible ? (
+          <div
+            className="pointer-events-none absolute left-0 top-0"
+            style={{
+              transform: `translate(${cursor.x}px, ${cursor.y}px)`,
+            }}
+            aria-hidden="true"
+          >
+            <div
+              style={{
+                width: `${(isEraser ? lineWidth * 2.5 : lineWidth) + 6}px`,
+                height: `${(isEraser ? lineWidth * 2.5 : lineWidth) + 6}px`,
+                transform: 'translate(-50%, -50%)',
+                borderRadius: '9999px',
+                border: isHighlighter
+                  ? '2px solid rgba(168,85,247,0.95)'
+                  : '2px solid rgba(15,23,42,0.85)',
+                boxShadow:
+                  '0 0 0 2px rgba(255,255,255,0.7), 0 0 10px rgba(2,6,23,0.18)',
+                background: isEraser
+                  ? 'rgba(226,232,240,0.18)'
+                  : isHighlighter
+                    ? 'rgba(168,85,247,0.08)'
+                    : 'transparent',
+              }}
+            />
+          </div>
+        ) : null}
+      </div>
     );
   },
 );

@@ -15,6 +15,8 @@ type Player = {
   userId?: number;
   nickname: string;
   isHost: boolean;
+  /** 백엔드 RoomInfoRes.ParticipantDto 의 isAi (Jackson 에 따라 ai 로 올 수 있음) */
+  isAi: boolean;
   submitted: boolean;
   roundWinCount: number;
   bubble?: string;
@@ -40,6 +42,8 @@ type RoomDetailParticipant = {
   userId: number;
   nickname: string;
   isHost: boolean;
+  isAi?: boolean;
+  ai?: boolean;
 };
 
 type RoomDetailData = {
@@ -205,6 +209,10 @@ function roomIsPlaying(room: RoomDetailData): boolean {
   return Boolean(room.isPlaying ?? room.playing);
 }
 
+function participantDtoIsAi(p: RoomDetailParticipant): boolean {
+  return Boolean(p.isAi ?? p.ai);
+}
+
 function normalizeWsSubmitDrawing(o: Record<string, unknown>): SubmitDrawingData {
   return {
     roundId: Number(o.roundId),
@@ -319,11 +327,13 @@ function buildPlayersFromRoundAndRoom(
 
   const nicknameByParticipantId = new Map<number, string>();
   const userIdByParticipantId = new Map<number, number>();
+  const isAiByParticipantId = new Map<number, boolean>();
   hostsRound.forEach((rp, i) => {
     const rm = hostsRoom[i];
     if (rm) {
       nicknameByParticipantId.set(rp.participantId, rm.nickname);
       userIdByParticipantId.set(rp.participantId, rm.userId);
+      isAiByParticipantId.set(rp.participantId, participantDtoIsAi(rm));
     }
   });
   guestsRound.forEach((rp, i) => {
@@ -331,6 +341,7 @@ function buildPlayersFromRoundAndRoom(
     if (rm) {
       nicknameByParticipantId.set(rp.participantId, rm.nickname);
       userIdByParticipantId.set(rp.participantId, rm.userId);
+      isAiByParticipantId.set(rp.participantId, participantDtoIsAi(rm));
     }
   });
 
@@ -341,6 +352,7 @@ function buildPlayersFromRoundAndRoom(
       nicknameByParticipantId.get(rp.participantId) ??
       (rp.isHost ? '호스트' : `참가자 ${rp.participantId}`),
     isHost: rp.isHost,
+    isAi: Boolean(isAiByParticipantId.get(rp.participantId)),
     submitted: rp.submitted,
     roundWinCount: rp.roundWinCount,
   }));
@@ -354,6 +366,7 @@ function mergePlayersKeepSubmitted(prev: Player[], mapped: Player[]): Player[] {
     ...p,
     submitted: Boolean(submittedById.get(p.id)) || Boolean(p.submitted),
     bubble: prevById.get(p.id)?.bubble,
+    isAi: p.isAi ?? prevById.get(p.id)?.isAi ?? false,
   }));
 }
 
@@ -394,6 +407,7 @@ export default function RoomDetailPage() {
   const [submitInfo, setSubmitInfo] = useState<SubmitDrawingData | null>(null);
   const [loadingStart, setLoadingStart] = useState(false);
   const [loadingSubmit, setLoadingSubmit] = useState(false);
+  const [loadingAiAction, setLoadingAiAction] = useState(false);
   const [leavingRoom, setLeavingRoom] = useState(false);
   const [error, setError] = useState('');
   const [stompChatLine, setStompChatLine] = useState<string | null>(null);
@@ -466,6 +480,7 @@ export default function RoomDetailPage() {
                 userId: p.userId,
                 nickname: p.nickname,
                 isHost: p.isHost,
+                isAi: participantDtoIsAi(p),
                 submitted: false,
                 roundWinCount: 0,
               })),
@@ -489,6 +504,7 @@ export default function RoomDetailPage() {
               userId: p.userId,
               nickname: p.nickname,
               isHost: p.isHost,
+              isAi: participantDtoIsAi(p),
               submitted: false,
               roundWinCount: 0,
             })),
@@ -846,6 +862,7 @@ export default function RoomDetailPage() {
                   userId: p.userId,
                   nickname: p.nickname,
                   isHost: p.isHost,
+                  isAi: participantDtoIsAi(p),
                   submitted: false,
                   roundWinCount: 0,
                 })),
@@ -868,6 +885,7 @@ export default function RoomDetailPage() {
                 userId: p.userId,
                 nickname: p.nickname,
                 isHost: p.isHost,
+                isAi: participantDtoIsAi(p),
                 submitted: false,
                 roundWinCount: 0,
               })),
@@ -893,6 +911,11 @@ export default function RoomDetailPage() {
     ? `제출 ${submitInfo.submittedCount} / ${submitInfo.totalParticipantCount}`
     : '제출 - / -';
   const statusLabel = roundInfo?.status === 'IN_PROGRESS' ? '진행중' : '대기중';
+  const myUserId = getJwtUserId(typeof window !== 'undefined' ? localStorage.getItem('accessToken') : null);
+  const myPlayer = myUserId != null ? players.find((p) => p.userId === myUserId) : undefined;
+  const isMyHost = Boolean(myPlayer?.isHost);
+  const hasAiPlayer = players.some((p) => p.isAi);
+  const isRoomInProgress = roundInfo?.status === 'IN_PROGRESS' && !submitInfo?.gameFinished;
 
   /** 에러·AI 결과만 (버튼/초기화와 무관하게 유지) */
   const feedbackLine = useMemo(() => {
@@ -925,7 +948,9 @@ export default function RoomDetailPage() {
       const st = getHttpStatus(e);
       if (isUnauthorizedStatus(st)) {
         clearAuthSession();
-        setError('로그인이 만료되었습니다. 다시 로그인해 주세요.');
+        clearStompChatLineAndTimer();
+        // 토큰 만료 상태에서는 leave API도 계속 403이므로, 사용자를 화면에서 먼저 빠져나가게 한다.
+        router.replace(`/login?redirect=${encodeURIComponent(`/rooms/${roomIdNumber}`)}`);
         return;
       }
       // 마지막 인원 퇴장 시 방 삭제 타이밍과 겹치면 404/409가 날 수 있다.
@@ -988,6 +1013,34 @@ export default function RoomDetailPage() {
       setError(e instanceof Error ? e.message : '게임 시작에 실패했습니다.');
     } finally {
       setLoadingStart(false);
+    }
+  }
+
+  async function handleAddAiPlayer() {
+    if (!roomIdNumber) return;
+    setError('');
+    setLoadingAiAction(true);
+    try {
+      await apiFetch<RoomDetailData>(`/api/rooms/${roomIdNumber}/ai-participants`, { method: 'POST' });
+      await refreshRoomParticipants();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'AI 참가자 추가에 실패했습니다.');
+    } finally {
+      setLoadingAiAction(false);
+    }
+  }
+
+  async function handleRemoveAiPlayer() {
+    if (!roomIdNumber) return;
+    setError('');
+    setLoadingAiAction(true);
+    try {
+      await apiFetch<RoomDetailData>(`/api/rooms/${roomIdNumber}/ai-participants`, { method: 'DELETE' });
+      await refreshRoomParticipants();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'AI 참가자 제거에 실패했습니다.');
+    } finally {
+      setLoadingAiAction(false);
     }
   }
 
@@ -1088,6 +1141,13 @@ export default function RoomDetailPage() {
           roundLabel={roundLabel}
           statusLabel={statusLabel}
           submitLabel={submitLabel}
+          isMyHost={isMyHost}
+          hasAiPlayer={hasAiPlayer}
+          aiActionDisabled={loadingAiAction || leavingRoom || loadingStart || isRoomInProgress}
+          onAddAi={handleAddAiPlayer}
+          onRemoveAi={handleRemoveAiPlayer}
+          loadingAiAction={loadingAiAction}
+          showStartButton={!isRoomInProgress}
           onStartGame={handleStartGame}
           loadingStart={loadingStart}
           onLeaveRoom={handleLeaveRoom}
@@ -1344,6 +1404,13 @@ function TopHud({
   roundLabel,
   statusLabel,
   submitLabel,
+  isMyHost,
+  hasAiPlayer,
+  aiActionDisabled,
+  onAddAi,
+  onRemoveAi,
+  loadingAiAction,
+  showStartButton,
   onStartGame,
   loadingStart,
   onLeaveRoom,
@@ -1353,6 +1420,13 @@ function TopHud({
   roundLabel: string;
   statusLabel: string;
   submitLabel: string;
+  isMyHost: boolean;
+  hasAiPlayer: boolean;
+  aiActionDisabled: boolean;
+  onAddAi: () => void;
+  onRemoveAi: () => void;
+  loadingAiAction: boolean;
+  showStartButton: boolean;
   onStartGame: () => void;
   loadingStart: boolean;
   onLeaveRoom: () => void | Promise<void>;
@@ -1369,22 +1443,34 @@ function TopHud({
         </div>
 
         <div className="flex flex-wrap justify-end gap-3">
+          {isMyHost ? (
+            <button
+              type="button"
+              onClick={hasAiPlayer ? onRemoveAi : onAddAi}
+              disabled={aiActionDisabled}
+              className="rounded-2xl border border-violet-300/30 bg-violet-500/10 px-5 py-3 text-sm font-bold text-violet-100 transition hover:bg-violet-500/20 disabled:opacity-50"
+            >
+              {loadingAiAction ? '처리 중...' : hasAiPlayer ? 'AI 제거' : 'AI 추가'}
+            </button>
+          ) : null}
           <button
             type="button"
             onClick={() => void onLeaveRoom()}
             disabled={leavingRoom || loadingStart}
             className="rounded-2xl border border-white/20 bg-white/5 px-5 py-3 text-sm font-bold text-slate-200 transition hover:border-rose-400/40 hover:bg-rose-500/10 hover:text-rose-100 disabled:opacity-50"
           >
-            {leavingRoom ? '나가는 중...' : '방 나가기'}
+            {leavingRoom ? '나가는 중...' : '로비로 나가기'}
           </button>
-          <button
-            type="button"
-            onClick={onStartGame}
-            disabled={loadingStart || leavingRoom}
-            className="rounded-2xl bg-gradient-to-r from-blue-500 to-violet-500 px-5 py-3 text-sm font-black text-white shadow-lg shadow-blue-500/20 transition hover:from-blue-400 hover:to-violet-400 disabled:opacity-50"
-          >
-            {loadingStart ? '시작 중...' : '게임 시작'}
-          </button>
+          {showStartButton ? (
+            <button
+              type="button"
+              onClick={onStartGame}
+              disabled={loadingStart || leavingRoom}
+              className="rounded-2xl bg-gradient-to-r from-blue-500 to-violet-500 px-5 py-3 text-sm font-black text-white shadow-lg shadow-blue-500/20 transition hover:from-blue-400 hover:to-violet-400 disabled:opacity-50"
+            >
+              {loadingStart ? '시작 중...' : '게임 시작'}
+            </button>
+          ) : null}
         </div>
       </div>
     </header>
@@ -1422,14 +1508,27 @@ function PlayerColumn({ players }: { players: Player[] }) {
 }
 
 function PlayerCard({ player }: { player: Player }) {
+  const isAi = Boolean(player.isAi);
   return (
-    <div className="rounded-[1.75rem] border border-white/10 bg-slate-900/70 p-5 shadow-xl backdrop-blur">
+    <div
+      className={`rounded-[1.75rem] border p-5 shadow-xl backdrop-blur ${
+        isAi
+          ? 'border-violet-400/35 bg-gradient-to-b from-violet-950/50 to-slate-900/75'
+          : 'border-white/10 bg-slate-900/70'
+      }`}
+    >
       <PlayerChatBubble text={player.bubble} />
 
       <div className="flex flex-col items-center text-center">
         <div className="relative">
-          <div className="flex h-20 w-20 items-center justify-center rounded-full border border-blue-400/30 bg-gradient-to-br from-[#0b1c3f] to-[#081122] text-2xl font-black text-white shadow-[0_0_30px_rgba(59,130,246,0.18)]">
-            {player.nickname.slice(0, 1)}
+          <div
+            className={`flex h-20 w-20 items-center justify-center rounded-full border text-2xl font-black text-white shadow-[0_0_30px_rgba(59,130,246,0.18)] ${
+              isAi
+                ? 'border-violet-400/50 bg-gradient-to-br from-violet-600/90 to-fuchsia-900/80 shadow-[0_0_28px_rgba(139,92,246,0.35)]'
+                : 'border-blue-400/30 bg-gradient-to-br from-[#0b1c3f] to-[#081122]'
+            }`}
+          >
+            {isAi ? '◇' : player.nickname.slice(0, 1)}
           </div>
           <span
             className={`absolute bottom-1 right-1 h-4 w-4 rounded-full ${
@@ -1438,8 +1537,13 @@ function PlayerCard({ player }: { player: Player }) {
           />
         </div>
 
-        <div className="mt-4 flex items-center gap-2">
+        <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
           <h3 className="text-2xl font-black tracking-tight text-white">{player.nickname}</h3>
+          {isAi && (
+            <span className="rounded-full border border-violet-400/40 bg-violet-500/20 px-2 py-1 text-[11px] font-black uppercase tracking-wide text-violet-200">
+              AI
+            </span>
+          )}
           {player.isHost && (
             <span className="rounded-full bg-blue-500/15 px-2 py-1 text-[11px] font-black text-blue-300">
               호스트
@@ -1447,7 +1551,10 @@ function PlayerCard({ player }: { player: Player }) {
           )}
         </div>
 
-        <p className="mt-2 text-sm text-slate-400">라운드 승리 {player.roundWinCount}회</p>
+        <p className="mt-2 text-sm text-slate-400">
+          라운드 승리 {player.roundWinCount}회
+          {isAi ? <span className="text-violet-200/80"> · 봇 (자동 제출)</span> : null}
+        </p>
 
         <div className="mt-5 w-full rounded-2xl bg-slate-950/80 px-4 py-4">
           <p
@@ -1463,20 +1570,19 @@ function PlayerCard({ player }: { player: Player }) {
   );
 }
 
-type DrawTool = 'black' | 'red' | 'blue' | 'eraser';
+type BrushKind = 'pen' | 'highlighter' | 'eraser';
 
-const STROKE: Record<Exclude<DrawTool, 'eraser'>, string> = {
-  black: '#171717',
-  red: '#ef4444',
-  blue: '#2563eb',
-};
-
-const TOOL_LABEL: Record<DrawTool, string> = {
-  black: '검정',
-  red: '빨강',
-  blue: '파랑',
-  eraser: '지우개',
-};
+const PALETTE = [
+  { name: '검정', color: '#171717' },
+  { name: '빨강', color: '#ef4444' },
+  { name: '파랑', color: '#2563eb' },
+  { name: '초록', color: '#22c55e' },
+  { name: '노랑', color: '#eab308' },
+  { name: '주황', color: '#f97316' },
+  { name: '보라', color: '#a855f7' },
+  { name: '갈색', color: '#92400e' },
+  { name: '회색', color: '#64748b' },
+] as const;
 
 function GameBoard({
   keyword,
@@ -1503,15 +1609,50 @@ function GameBoard({
   loadingSubmit: boolean;
 }) {
   const canvasRef = useRef<DrawingCanvasHandle>(null);
-  const [tool, setTool] = useState<DrawTool>('black');
+  const [brush, setBrush] = useState<BrushKind>('pen');
+  const [strokeColor, setStrokeColor] = useState<string>(PALETTE[0].color);
   const [lineWidth, setLineWidth] = useState(8);
   const [chatInput, setChatInput] = useState('');
-  const strokeColor = tool === 'eraser' ? '#ffffff' : STROKE[tool];
-  const isEraser = tool === 'eraser';
+  const [submitConfirmOpen, setSubmitConfirmOpen] = useState(false);
+  const isEraser = brush === 'eraser';
+  const isHighlighter = brush === 'highlighter';
+  const effectiveLineWidth = isHighlighter ? Math.round(lineWidth * 1.8) : lineWidth;
+  const effectiveOpacity = isHighlighter ? 0.35 : 1;
 
   useEffect(() => {
     canvasRef.current?.clear();
   }, [activeRoundId]);
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      const isTyping =
+        e.target instanceof HTMLElement &&
+        (e.target.tagName === 'INPUT' ||
+          e.target.tagName === 'TEXTAREA' ||
+          e.target.isContentEditable);
+      if (isTyping) return;
+
+      const meta = e.metaKey || e.ctrlKey;
+      if (!meta) return;
+
+      const key = e.key.toLowerCase();
+      if (key === 'z') {
+        e.preventDefault();
+        if (e.shiftKey) {
+          canvasRef.current?.redo();
+        } else {
+          canvasRef.current?.undo();
+        }
+        return;
+      }
+      if (key === 'y') {
+        e.preventDefault();
+        canvasRef.current?.redo();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
 
   function handleClearCanvas() {
     canvasRef.current?.clear();
@@ -1523,6 +1664,17 @@ function GameBoard({
       setError('캔버스에 그림을 그린 뒤 제출해 주세요.');
       return;
     }
+    setSubmitConfirmOpen(true);
+  }
+
+  function confirmSubmit() {
+    const api = canvasRef.current;
+    if (!api?.getHasDrawing()) {
+      setSubmitConfirmOpen(false);
+      setError('캔버스에 그림을 그린 뒤 제출해 주세요.');
+      return;
+    }
+    setSubmitConfirmOpen(false);
     setError('');
     void onSubmitDrawing(api.toDataUrl());
   }
@@ -1561,10 +1713,10 @@ function GameBoard({
             <p className="max-w-[520px] text-center text-sm leading-relaxed text-slate-300">{instructionLine}</p>
             <div className="flex flex-wrap items-center justify-center gap-2 sm:gap-3">
               <div className="rounded-2xl border border-white/10 bg-slate-950/50 px-4 py-2 text-sm font-bold text-slate-200">
-                펜 {lineWidth}px
+                굵기 {lineWidth}px
               </div>
               <div className="rounded-2xl border border-white/10 bg-slate-950/50 px-4 py-2 text-sm font-bold text-slate-200">
-                {isEraser ? '지우개' : `색 ${TOOL_LABEL[tool]}`}
+                {isEraser ? '지우개' : isHighlighter ? '형광펜' : '펜'}
               </div>
             </div>
           </div>
@@ -1574,19 +1726,26 @@ function GameBoard({
           <div className="mx-auto flex w-full justify-center px-0.5">
             <DrawingCanvas
               ref={canvasRef}
-              strokeColor={strokeColor}
-              lineWidth={lineWidth}
+              strokeColor={isEraser ? '#ffffff' : strokeColor}
+              lineWidth={effectiveLineWidth}
               isEraser={isEraser}
+              strokeOpacity={effectiveOpacity}
             />
           </div>
         </div>
 
         <DrawingToolbar
-          tool={tool}
-          onToolChange={setTool}
+          brush={brush}
+          onBrushChange={setBrush}
+          strokeColor={strokeColor}
+          onStrokeColorChange={setStrokeColor}
           lineWidth={lineWidth}
           onLineWidthChange={setLineWidth}
           onClear={handleClearCanvas}
+          onUndo={() => canvasRef.current?.undo()}
+          onRedo={() => canvasRef.current?.redo()}
+          canUndo={Boolean(canvasRef.current?.canUndo())}
+          canRedo={Boolean(canvasRef.current?.canRedo())}
           onSubmit={handleSubmitClick}
           loadingSubmit={loadingSubmit}
         />
@@ -1617,36 +1776,102 @@ function GameBoard({
           </button>
         </div>
       </div>
+      {submitConfirmOpen ? (
+        <ConfirmModal
+          title="그림 제출"
+          description="정말 제출할까요? 제출 후에는 수정할 수 없습니다."
+          confirmLabel={loadingSubmit ? '제출 중...' : '제출하기'}
+          cancelLabel="취소"
+          disabled={loadingSubmit}
+          onCancel={() => setSubmitConfirmOpen(false)}
+          onConfirm={confirmSubmit}
+        />
+      ) : null}
     </section>
   );
 }
 
 function DrawingToolbar({
-  tool,
-  onToolChange,
+  brush,
+  onBrushChange,
+  strokeColor,
+  onStrokeColorChange,
   lineWidth,
   onLineWidthChange,
   onClear,
+  onUndo,
+  onRedo,
+  canUndo,
+  canRedo,
   onSubmit,
   loadingSubmit,
 }: {
-  tool: DrawTool;
-  onToolChange: (t: DrawTool) => void;
+  brush: BrushKind;
+  onBrushChange: (b: BrushKind) => void;
+  strokeColor: string;
+  onStrokeColorChange: (c: string) => void;
   lineWidth: number;
   onLineWidthChange: (n: number) => void;
   onClear: () => void;
+  onUndo: () => void;
+  onRedo: () => void;
+  canUndo: boolean;
+  canRedo: boolean;
   onSubmit: () => void;
   loadingSubmit: boolean;
 }) {
+  const [openHelp, setOpenHelp] = useState<null | 'undo' | 'redo'>(null);
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpenHelp(null);
+    };
+    const onPointerDown = (e: PointerEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (!t) return;
+      if (t.closest('[data-help-popover-root]')) return;
+      setOpenHelp(null);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('pointerdown', onPointerDown);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('pointerdown', onPointerDown);
+    };
+  }, []);
+
   return (
     <div className="rounded-xl border border-white/10 bg-slate-950/60 p-3 sm:rounded-[1.5rem] sm:p-4">
       <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
         <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
           <div className="flex flex-wrap items-center gap-3">
-            <ToolButton label="검정" active={tool === 'black'} onClick={() => onToolChange('black')} />
-            <ToolButton label="빨강" active={tool === 'red'} onClick={() => onToolChange('red')} />
-            <ToolButton label="파랑" active={tool === 'blue'} onClick={() => onToolChange('blue')} />
-            <ToolButton label="지우개" active={tool === 'eraser'} onClick={() => onToolChange('eraser')} />
+            <ToolButton label="펜" active={brush === 'pen'} onClick={() => onBrushChange('pen')} />
+            <ToolButton label="형광펜" active={brush === 'highlighter'} onClick={() => onBrushChange('highlighter')} />
+            <ToolButton label="지우개" active={brush === 'eraser'} onClick={() => onBrushChange('eraser')} />
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {PALETTE.map((p) => (
+              <button
+                key={p.color}
+                type="button"
+                onClick={() => onStrokeColorChange(p.color)}
+                className={`h-8 w-8 rounded-full border transition ${
+                  strokeColor === p.color ? 'border-white ring-2 ring-white/30' : 'border-white/15'
+                }`}
+                style={{ backgroundColor: p.color }}
+                aria-label={`색상 ${p.name}`}
+              />
+            ))}
+            <label className="ml-1 flex items-center gap-2 rounded-2xl border border-white/10 bg-slate-900/60 px-3 py-2 text-xs font-bold text-slate-200">
+              커스텀
+              <input
+                type="color"
+                value={strokeColor}
+                onChange={(e) => onStrokeColorChange(e.target.value)}
+                className="h-6 w-8 cursor-pointer rounded"
+                aria-label="커스텀 색상"
+              />
+            </label>
           </div>
           <div className="flex items-center gap-2 rounded-2xl border border-white/10 bg-slate-900/60 px-3 py-2">
             <span className="shrink-0 text-xs font-bold text-slate-400">펜 굵기</span>
@@ -1662,9 +1887,78 @@ function DrawingToolbar({
             />
             <span className="w-10 shrink-0 text-right font-mono text-xs font-bold text-slate-200">{lineWidth}px</span>
           </div>
+          <div className="flex items-center gap-2 rounded-2xl border border-white/10 bg-slate-900/60 px-3 py-2">
+            <span className="shrink-0 text-xs font-bold text-slate-400">미리보기</span>
+            <div className="h-6 w-24 rounded-lg bg-white/90" aria-hidden="true">
+              <div
+                className="mx-auto mt-[11px] rounded-full"
+                style={{
+                  width: '80%',
+                  height: Math.max(2, Math.round(lineWidth / 2)),
+                  backgroundColor: brush === 'eraser' ? '#e2e8f0' : strokeColor,
+                  opacity: brush === 'highlighter' ? 0.35 : 1,
+                }}
+              />
+            </div>
+          </div>
         </div>
 
-        <div className="flex flex-wrap gap-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="inline-flex flex-nowrap items-center gap-2">
+            <div className="relative inline-flex items-center gap-1.5" data-help-popover-root>
+              <button
+                type="button"
+                onClick={onUndo}
+                disabled={!canUndo}
+                className="min-w-[104px] whitespace-nowrap rounded-2xl border border-white/10 bg-slate-900/60 px-4 py-2.5 text-sm font-bold leading-none text-slate-200 transition hover:bg-slate-800/60 hover:border-blue-300/30 disabled:opacity-50"
+              >
+                실행 취소
+              </button>
+              <button
+                type="button"
+                onClick={() => setOpenHelp((prev) => (prev === 'undo' ? null : 'undo'))}
+                className="inline-flex h-6 w-6 items-center justify-center rounded-full border border-white/10 bg-white/5 text-[11px] font-black text-slate-200 transition hover:bg-white/10"
+                aria-label="실행 취소 도움말 열기"
+              >
+                ?
+              </button>
+              {openHelp === 'undo' ? (
+                <HelpPopover
+                  title="실행 취소"
+                  lines={['방금 그린 내용을 1단계 되돌립니다.', '단축키: Ctrl+Z (Mac: ⌘Z)']}
+                />
+              ) : null}
+            </div>
+
+            <div className="relative inline-flex items-center gap-1.5" data-help-popover-root>
+              <button
+                type="button"
+                onClick={onRedo}
+                disabled={!canRedo}
+                className="min-w-[104px] whitespace-nowrap rounded-2xl border border-white/10 bg-slate-900/60 px-4 py-2.5 text-sm font-bold leading-none text-slate-200 transition hover:bg-slate-800/60 hover:border-blue-300/30 disabled:opacity-50"
+              >
+                다시 실행
+              </button>
+              <button
+                type="button"
+                onClick={() => setOpenHelp((prev) => (prev === 'redo' ? null : 'redo'))}
+                className="inline-flex h-6 w-6 items-center justify-center rounded-full border border-white/10 bg-white/5 text-[11px] font-black text-slate-200 transition hover:bg-white/10"
+                aria-label="다시 실행 도움말 열기"
+              >
+                ?
+              </button>
+              {openHelp === 'redo' ? (
+                <HelpPopover
+                  title="다시 실행"
+                  lines={[
+                    '되돌린 내용을 다시 적용합니다.',
+                    '단축키: Ctrl+Y 또는 Ctrl+Shift+Z (Mac: ⌘⇧Z)',
+                  ]}
+                />
+              ) : null}
+            </div>
+          </div>
+
           <button
             type="button"
             onClick={onClear}
@@ -1707,5 +2001,96 @@ function ToolButton({
     >
       {label}
     </button>
+  );
+}
+
+function HelpPopover({ title, lines }: { title: string; lines: string[] }) {
+  return (
+    <div className="absolute right-0 top-[44px] z-20 w-64 rounded-2xl border border-white/10 bg-slate-950/95 p-3 shadow-2xl backdrop-blur">
+      <p className="text-sm font-black text-white">{title}</p>
+      <ul className="mt-2 space-y-1 text-xs leading-relaxed text-slate-300">
+        {lines.map((line) => (
+          <li key={line} className="flex gap-2">
+            <span className="mt-[6px] h-1 w-1 shrink-0 rounded-full bg-slate-500" />
+            <span>{line}</span>
+          </li>
+        ))}
+      </ul>
+      <p className="mt-2 text-[11px] text-slate-500">팁: ESC 또는 바깥 클릭으로 닫을 수 있어요.</p>
+    </div>
+  );
+}
+
+function ConfirmModal({
+  title,
+  description,
+  confirmLabel,
+  cancelLabel,
+  disabled,
+  onCancel,
+  onConfirm,
+}: {
+  title: string;
+  description: string;
+  confirmLabel: string;
+  cancelLabel: string;
+  disabled?: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onCancel();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [onCancel]);
+
+  return (
+    <div
+      className="fixed inset-0 z-[95] flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-sm"
+      role="dialog"
+      aria-modal="true"
+      aria-label={title}
+      onClick={onCancel}
+    >
+      <div
+        className="w-full max-w-sm rounded-2xl border border-white/10 bg-slate-900/95 p-5 shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p className="text-sm font-black text-white">{title}</p>
+            <p className="mt-2 text-sm leading-relaxed text-slate-300">{description}</p>
+          </div>
+          <button
+            type="button"
+            onClick={onCancel}
+            className="rounded-lg px-2 py-1 text-slate-300 transition hover:bg-white/10 hover:text-white"
+            aria-label="닫기"
+          >
+            ✕
+          </button>
+        </div>
+
+        <div className="mt-5 flex gap-2">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="flex-1 rounded-xl border border-white/15 bg-white/5 px-4 py-2.5 text-sm font-bold text-slate-200 transition hover:bg-white/10"
+          >
+            {cancelLabel}
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={Boolean(disabled)}
+            className="flex-1 rounded-xl bg-gradient-to-r from-blue-500 to-violet-500 px-4 py-2.5 text-sm font-black text-white shadow-lg shadow-blue-500/20 transition hover:from-blue-400 hover:to-violet-400 disabled:opacity-50"
+          >
+            {confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }

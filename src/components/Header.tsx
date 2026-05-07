@@ -1,14 +1,19 @@
 'use client';
 
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
+import { apiFetch } from '@/lib/api-client';
+import { clearAuthSession } from '@/lib/auth-session';
 
 export default function Header() {
   const router = useRouter();
+  const pathname = usePathname();
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [receivedRequestCount, setReceivedRequestCount] = useState(0);
   const reconcileTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const isRoomDetailPage = Boolean(pathname && /^\/rooms\/[^/]+$/.test(pathname));
 
   useEffect(() => {
     const syncAuthState = () => {
@@ -92,13 +97,20 @@ export default function Header() {
     };
   }, [isLoggedIn]);
 
-  function handleLogout() {
-    localStorage.removeItem('accessToken');
-    setIsLoggedIn(false);
-    window.dispatchEvent(new Event('auth-changed'));
-    router.push('/');
-    router.refresh();
+  async function handleLogout() {
+    try {
+      await apiFetch<void>('/api/auth/logout', { method: 'DELETE' });
+    } catch {
+      // 토큰 만료 등으로 서버 로그아웃이 실패해도 클라이언트 세션은 반드시 정리
+    } finally {
+      clearAuthSession();
+      setIsLoggedIn(false);
+      router.push('/');
+      router.refresh();
+    }
   }
+
+  if (isRoomDetailPage) return null;
 
   return (
     <header className="sticky top-0 z-50 border-b border-white/10 bg-slate-950/65 backdrop-blur-xl">
