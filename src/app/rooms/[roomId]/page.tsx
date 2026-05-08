@@ -65,6 +65,8 @@ type RoundStartData = {
   keyword: string;
   status: 'READY' | 'IN_PROGRESS' | 'FINISHED';
   startedAt: string;
+  /** 백엔드 RoundStartResponse.timeLimit(초) — 없으면 FALLBACK_ROUND_TIME_LIMIT_SEC */
+  timeLimit?: number;
 };
 
 /** STOMP 본문의 숫자 필드가 문자열로 올 때(Jackson 설정 등) 흡수 */
@@ -97,6 +99,9 @@ function parseStompRoundStartPayload(o: Record<string, unknown>, fallbackRoomId:
   if (typeof o.startedAt === 'string') startedAt = o.startedAt;
   else if (o.startedAt != null) startedAt = JSON.stringify(o.startedAt);
 
+  const tl = parseStompNumeric(o.timeLimit);
+  const timeLimitNum = Number.isFinite(tl) && tl > 0 ? tl : undefined;
+
   return {
     roomId,
     roundId,
@@ -104,6 +109,7 @@ function parseStompRoundStartPayload(o: Record<string, unknown>, fallbackRoomId:
     keyword: kw.trim(),
     status,
     startedAt,
+    ...(timeLimitNum != null ? { timeLimit: timeLimitNum } : {}),
   };
 }
 
@@ -114,6 +120,10 @@ type CurrentRoundData = {
   keyword: string;
   status: 'READY' | 'IN_PROGRESS' | 'FINISHED';
   isTiebreaker: boolean;
+  /** ISO 등 서버 시작 시각 — 있으면 탭 간 남은 시간 동기화 */
+  startedAt?: string;
+  /** 백엔드 현재 라운드 timeLimit(초) */
+  timeLimit?: number;
   participants: CurrentRoundParticipant[];
 };
 
@@ -419,6 +429,16 @@ function normalizeRoundParticipant(p: CurrentRoundParticipantJson): CurrentRound
 }
 
 function normalizeCurrentRoundData(raw: CurrentRoundDataJson): CurrentRoundData {
+  let startedAt: string | undefined;
+  const rawStarted = raw.startedAt as unknown;
+  if (typeof rawStarted === 'string') startedAt = rawStarted;
+
+  let timeLimit: number | undefined;
+  const rawTl = raw.timeLimit as unknown;
+  if (typeof rawTl === 'number' && Number.isFinite(rawTl) && rawTl > 0) {
+    timeLimit = Math.floor(rawTl);
+  }
+
   return {
     roomId: raw.roomId,
     roundId: raw.roundId,
@@ -426,6 +446,8 @@ function normalizeCurrentRoundData(raw: CurrentRoundDataJson): CurrentRoundData 
     keyword: raw.keyword,
     status: raw.status,
     isTiebreaker: Boolean(raw.isTiebreaker ?? raw.tiebreaker),
+    ...(startedAt ? { startedAt } : {}),
+    ...(timeLimit != null ? { timeLimit } : {}),
     participants: raw.participants.map(normalizeRoundParticipant),
   };
 }
@@ -507,7 +529,35 @@ function getJwtUserId(token: string | null): number | null {
 
 /** 라운드 종료 직후 결과를 볼 시간을 준 뒤 다음 라운드(또는 로비)로 동기화 */
 const ROUND_ADVANCE_SYNC_DELAY_MS = 10_000;
-const ROUND_DISPLAY_TIMER_MS = 60_000;
+/** 서버 RoundService.ROUND_TIME_LIMIT 과 동일 — API 에 timeLimit 이 없을 때만 */
+const FALLBACK_ROUND_TIME_LIMIT_SEC = 60;
+
+/** 서버 시작 시각 + 제한 초 → 모든 탭이 동일 마감 시각 사용 */
+function computeRoundCountdownEndsAtMs(
+  roundInfo: RoundStartData | CurrentRoundData,
+  timeLimitOverrideSec?: number | null,
+): number {
+  const tls =
+    typeof timeLimitOverrideSec === 'number' &&
+    Number.isFinite(timeLimitOverrideSec) &&
+    timeLimitOverrideSec > 0
+      ? Math.floor(timeLimitOverrideSec)
+      : typeof roundInfo.timeLimit === 'number' &&
+          Number.isFinite(roundInfo.timeLimit) &&
+          roundInfo.timeLimit > 0
+        ? Math.floor(roundInfo.timeLimit)
+        : FALLBACK_ROUND_TIME_LIMIT_SEC;
+
+  let startedMs: number | null = null;
+  const raw =
+    typeof roundInfo.startedAt === 'string' ? roundInfo.startedAt.trim() : '';
+  if (raw.length > 0) {
+    const p = Date.parse(raw);
+    if (Number.isFinite(p)) startedMs = p;
+  }
+  if (startedMs != null) return startedMs + tls * 1000;
+  return Date.now() + tls * 1000;
+}
 
 export default function RoomDetailPage() {
   const params = useParams<{ roomId: string }>();
@@ -525,6 +575,8 @@ export default function RoomDetailPage() {
   const [roundInfo, setRoundInfo] = useState<RoundStartData | CurrentRoundData | null>(null);
   const [submitInfo, setSubmitInfo] = useState<SubmitDrawingData | null>(null);
   const [timeOverSignal, setTimeOverSignal] = useState(0);
+  /** RoundStartResponse.timeLimit을 roundId별로 기억해 current-round에도 적용 */
+  const roundTimeLimitByRoundIdRef = useRef<Map<number, number>>(new Map());
   const [roundRemainingSec, setRoundRemainingSec] = useState<number | null>(null);
   const [roomCapacity, setRoomCapacity] = useState<{
     curPlayers: number;
@@ -718,7 +770,8 @@ export default function RoomDetailPage() {
       return;
     }
 
-    const deadline = Date.now() + ROUND_DISPLAY_TIMER_MS;
+    const cachedTl = roundTimeLimitByRoundIdRef.current.get(roundInfo.roundId) ?? null;
+    const deadline = computeRoundCountdownEndsAtMs(roundInfo, cachedTl);
     const tick = () => {
       const sec = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
       setRoundRemainingSec(sec);
@@ -732,7 +785,10 @@ export default function RoomDetailPage() {
         roundTimerIntervalRef.current = null;
       }
     };
-  }, [roundInfo?.status, roundInfo?.roundId, submitInfo?.gameFinished]);
+  }, [
+    roundInfo,
+    submitInfo?.gameFinished,
+  ]);
 
   /** 라운드 종료 후 제출 목록 API로 점수판·그림 갤러리 */
   useEffect(() => {
@@ -891,6 +947,9 @@ export default function RoomDetailPage() {
       }
       const rs = parseStompRoundStartPayload(o, roomIdNumber);
       if (rs) {
+        if (typeof rs.timeLimit === 'number' && Number.isFinite(rs.timeLimit) && rs.timeLimit > 0) {
+          roundTimeLimitByRoundIdRef.current.set(rs.roundId, Math.floor(rs.timeLimit));
+        }
         clearPersistedRoundUi(roomIdNumber);
         setRoundInfo(rs);
         setSubmitInfo(null);
@@ -1186,6 +1245,9 @@ export default function RoomDetailPage() {
     try {
       clearPersistedRoundUi(roomIdNumber);
       const data = await apiFetch<RoundStartData>(`/api/rooms/${roomIdNumber}/start`, { method: 'POST' });
+      if (typeof data.timeLimit === 'number' && Number.isFinite(data.timeLimit) && data.timeLimit > 0) {
+        roundTimeLimitByRoundIdRef.current.set(data.roundId, Math.floor(data.timeLimit));
+      }
       setRoundInfo(data);
 
       // 시작 직후 현재 라운드를 가져와 참가자/키워드를 UI에 반영
