@@ -79,6 +79,24 @@ export default function LoginPage() {
 
   return (
     <main className="min-h-[calc(100vh-4rem)]">
+      {guestLoading ? (
+        <div
+          className="fixed inset-0 z-[95] flex items-center justify-center bg-slate-950/75 p-4 backdrop-blur-sm"
+          role="status"
+          aria-live="assertive"
+          aria-busy="true"
+        >
+          <div className="flex w-full max-w-sm flex-col items-center gap-4 rounded-3xl border border-cyan-300/30 bg-slate-900/95 px-8 py-9 text-center shadow-2xl ring-1 ring-cyan-300/20">
+            <span className="inline-block h-12 w-12 animate-spin rounded-full border-[4px] border-cyan-100/25 border-t-cyan-200" />
+            <p className="text-xl font-black text-white">게스트 계정 생성 중</p>
+            <p className="text-sm leading-relaxed text-slate-300">
+              닉네임을 만들고 로그인 중입니다.
+              <br />
+              잠시만 기다려 주세요.
+            </p>
+          </div>
+        </div>
+      ) : null}
       <section className="mx-auto flex min-h-[calc(100vh-4rem)] max-w-md items-center px-6 py-16">
         <div className="w-full rounded-3xl border border-white/10 bg-white/[0.04] p-8 shadow-2xl backdrop-blur">
           <div className="text-center">
@@ -136,12 +154,6 @@ export default function LoginPage() {
             >
               {guestLoading ? '게스트 로그인 중... (닉네임 생성 중)' : '게스트로 시작하기'}
             </button>
-
-            {guestLoading ? (
-              <p className="text-center text-xs text-slate-400">
-                AI가 게스트 닉네임을 생성하고 있어요. 최대 수 초 정도 걸릴 수 있습니다.
-              </p>
-            ) : null}
 
             {error && <p className="text-center text-sm text-rose-300">{error}</p>}
           </form>
