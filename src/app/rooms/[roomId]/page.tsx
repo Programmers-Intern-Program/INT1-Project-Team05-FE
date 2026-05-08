@@ -50,6 +50,8 @@ type RoomDetailData = {
   roomId: number;
   curPlayers: number;
   maxPlayers: number;
+  /** 방 생성 시 설정한 총 라운드 수 (일반 라운드 기준) */
+  totalRounds?: number;
   participants: RoomDetailParticipant[];
   /** Jackson에 따라 `playing`으로 올 수 있음 */
   isPlaying?: boolean;
@@ -308,6 +310,17 @@ function normalizeRankingRow(raw: unknown): FinalRankingRow | null {
   };
 }
 
+function roomCapacityFromDetail(d: RoomDetailData): {
+  curPlayers: number;
+  maxPlayers: number;
+  totalRounds: number | null;
+} {
+  const t = d.totalRounds;
+  const totalRounds =
+    typeof t === 'number' && Number.isFinite(t) && t > 0 ? Math.floor(t) : null;
+  return { curPlayers: d.curPlayers, maxPlayers: d.maxPlayers, totalRounds };
+}
+
 function roomIsPlaying(room: RoomDetailData): boolean {
   return Boolean(room.isPlaying ?? room.playing);
 }
@@ -461,13 +474,15 @@ function buildPlayersFromRoundAndRoom(
   }));
 }
 
-/** 같은 참가자 id면 이전 UI 상태(제출/말풍선)를 유지하고, 새 맵 값도 반영 */
+/**
+ * 말풍선·AI 표시 등만 이전 행을 이어 붙이고, 제출 여부는 mapped만 따른다.
+ * (이전 라운드 submitted를 OR로 유지하면 새 라운드에서도 제출 완료로 고정되는 버그가 난다.)
+ */
 function mergePlayersKeepSubmitted(prev: Player[], mapped: Player[]): Player[] {
   const prevById = new Map(prev.map((p) => [p.id, p]));
-  const submittedById = new Map(prev.map((p) => [p.id, p.submitted]));
   return mapped.map((p) => ({
     ...p,
-    submitted: Boolean(submittedById.get(p.id)) || Boolean(p.submitted),
+    submitted: Boolean(p.submitted),
     bubble: prevById.get(p.id)?.bubble,
     isAi: p.isAi ?? prevById.get(p.id)?.isAi ?? false,
   }));
@@ -492,6 +507,7 @@ function getJwtUserId(token: string | null): number | null {
 
 /** 라운드 종료 직후 결과를 볼 시간을 준 뒤 다음 라운드(또는 로비)로 동기화 */
 const ROUND_ADVANCE_SYNC_DELAY_MS = 10_000;
+const ROUND_DISPLAY_TIMER_MS = 60_000;
 
 export default function RoomDetailPage() {
   const params = useParams<{ roomId: string }>();
@@ -508,7 +524,13 @@ export default function RoomDetailPage() {
   const [participantId, setParticipantId] = useState<string>('');
   const [roundInfo, setRoundInfo] = useState<RoundStartData | CurrentRoundData | null>(null);
   const [submitInfo, setSubmitInfo] = useState<SubmitDrawingData | null>(null);
-  const [roomCapacity, setRoomCapacity] = useState<{ curPlayers: number; maxPlayers: number } | null>(null);
+  const [timeOverSignal, setTimeOverSignal] = useState(0);
+  const [roundRemainingSec, setRoundRemainingSec] = useState<number | null>(null);
+  const [roomCapacity, setRoomCapacity] = useState<{
+    curPlayers: number;
+    maxPlayers: number;
+    totalRounds: number | null;
+  } | null>(null);
   const [loadingStart, setLoadingStart] = useState(false);
   const [loadingSubmit, setLoadingSubmit] = useState(false);
   const [loadingAiAction, setLoadingAiAction] = useState(false);
@@ -521,6 +543,7 @@ export default function RoomDetailPage() {
   const roundAdvanceSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const roundAdvanceCountdownIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const roundAdvanceEndsAtRef = useRef<number | null>(null);
+  const roundTimerIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   /** 개발 모드 Strict Mode에서 effect가 두 번 돌며 join이 동시에 두 번 나가면 백엔드에서 500이 날 수 있음 — 최신 진입만 유효 */
   const roomEnterSeqRef = useRef(0);
   const [roundAdvanceCountdownSec, setRoundAdvanceCountdownSec] = useState<number | null>(null);
@@ -549,7 +572,7 @@ export default function RoomDetailPage() {
     if (!roomIdNumber) return;
     try {
       const latest = await apiFetch<RoomDetailData>(`/api/rooms/${roomIdNumber}`);
-      setRoomCapacity({ curPlayers: latest.curPlayers, maxPlayers: latest.maxPlayers });
+      setRoomCapacity(roomCapacityFromDetail(latest));
       if (roomIsPlaying(latest)) {
         try {
           const dataRaw = await apiFetch<CurrentRoundDataJson>(`/api/rooms/${roomIdNumber}/rounds/current`);
@@ -676,8 +699,40 @@ export default function RoomDetailPage() {
         clearTimeout(stompChatClearTimerRef.current);
         stompChatClearTimerRef.current = null;
       }
+      if (roundTimerIntervalRef.current) {
+        clearInterval(roundTimerIntervalRef.current);
+        roundTimerIntervalRef.current = null;
+      }
     };
   }, []);
+
+  useEffect(() => {
+    if (roundTimerIntervalRef.current) {
+      clearInterval(roundTimerIntervalRef.current);
+      roundTimerIntervalRef.current = null;
+    }
+
+    const inProgress = roundInfo?.status === 'IN_PROGRESS' && !submitInfo?.gameFinished;
+    if (!inProgress || !roundInfo?.roundId) {
+      setRoundRemainingSec(null);
+      return;
+    }
+
+    const deadline = Date.now() + ROUND_DISPLAY_TIMER_MS;
+    const tick = () => {
+      const sec = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+      setRoundRemainingSec(sec);
+    };
+    tick();
+    roundTimerIntervalRef.current = setInterval(tick, 250);
+
+    return () => {
+      if (roundTimerIntervalRef.current) {
+        clearInterval(roundTimerIntervalRef.current);
+        roundTimerIntervalRef.current = null;
+      }
+    };
+  }, [roundInfo?.status, roundInfo?.roundId, submitInfo?.gameFinished]);
 
   /** 라운드 종료 후 제출 목록 API로 점수판·그림 갤러리 */
   useEffect(() => {
@@ -823,6 +878,17 @@ export default function RoomDetailPage() {
         void refreshRoomParticipants();
         return;
       }
+      if (evt === 'TIME_OVER') {
+        const payloadRoundId = Number(o.data);
+        const activeRoundId = roundInfo?.roundId;
+        // 현재 라운드 타임오버일 때만 자동 제출 신호를 올린다.
+        if (!Number.isFinite(payloadRoundId) || !activeRoundId || payloadRoundId === activeRoundId) {
+          setRoundRemainingSec(0);
+          showTransientStompChat('알림: 제한 시간이 종료되어 현재 그림을 자동 제출합니다.');
+          setTimeOverSignal((v) => v + 1);
+        }
+        return;
+      }
       const rs = parseStompRoundStartPayload(o, roomIdNumber);
       if (rs) {
         clearPersistedRoundUi(roomIdNumber);
@@ -849,6 +915,7 @@ export default function RoomDetailPage() {
       scheduleRoundAdvanceSync,
       showTransientStompChat,
       clearStompChatLineAndTimer,
+      roundInfo?.roundId,
     ],
   );
 
@@ -902,7 +969,7 @@ export default function RoomDetailPage() {
         // 1) 먼저 방 상세를 가져와서, 이미 내가 참여자인지 확인
         //    (방 생성 시 호스트는 백엔드가 이미 Participant로 넣어주기 때문에 join을 또 호출하면 중복이 생길 수 있음)
         const roomDetail = await apiFetch<RoomDetailData>(`/api/rooms/${roomIdNumber}`);
-        setRoomCapacity({ curPlayers: roomDetail.curPlayers, maxPlayers: roomDetail.maxPlayers });
+        setRoomCapacity(roomCapacityFromDetail(roomDetail));
         if (isStale()) return;
 
         const myUserId = getJwtUserId(localStorage.getItem('accessToken'));
@@ -936,7 +1003,7 @@ export default function RoomDetailPage() {
 
         // 3) 최신 방 상세 — 게임 중이면 현재 라운드까지 불러와 HUD·제출 표시 복원
         const latest = await apiFetch<RoomDetailData>(`/api/rooms/${roomIdNumber}`);
-        setRoomCapacity({ curPlayers: latest.curPlayers, maxPlayers: latest.maxPlayers });
+        setRoomCapacity(roomCapacityFromDetail(latest));
         if (isStale()) return;
 
         if (roomIsPlaying(latest)) {
@@ -1013,7 +1080,12 @@ export default function RoomDetailPage() {
   }, [roomIdNumber, clearStompChatLineAndTimer, refreshRoomParticipants]);
 
   const keyword = roundInfo?.keyword?.trim() ?? '';
-  const roundLabel = roundInfo ? `라운드 ${roundInfo.roundNumber}` : '라운드 -';
+  const roundLabel = useMemo(() => {
+    if (!roundInfo) return '라운드 -';
+    const total = roomCapacity?.totalRounds;
+    if (total != null && total > 0) return `라운드 ${roundInfo.roundNumber} / ${total}`;
+    return `라운드 ${roundInfo.roundNumber}`;
+  }, [roundInfo, roomCapacity?.totalRounds]);
   const submitLabel = submitInfo
     ? `제출 ${submitInfo.submittedCount} / ${submitInfo.totalParticipantCount}`
     : '제출 - / -';
@@ -1024,6 +1096,10 @@ export default function RoomDetailPage() {
   const hasAiPlayer = players.some((p) => p.isAi);
   const canAddAi = roomCapacity ? roomCapacity.curPlayers < roomCapacity.maxPlayers : true;
   const isRoomInProgress = roundInfo?.status === 'IN_PROGRESS' && !submitInfo?.gameFinished;
+  const roundTimerLabel =
+    roundRemainingSec != null
+      ? `${Math.floor(roundRemainingSec / 60)}:${String(roundRemainingSec % 60).padStart(2, '0')}`
+      : null;
 
   /** 에러·AI 결과만 (버튼/초기화와 무관하게 유지) */
   const feedbackLine = useMemo(() => {
@@ -1117,6 +1193,7 @@ export default function RoomDetailPage() {
       const cur = normalizeCurrentRoundData(curRaw);
       setRoundInfo(cur);
       const latestRoom = await apiFetch<RoomDetailData>(`/api/rooms/${roomIdNumber}`);
+      setRoomCapacity(roomCapacityFromDetail(latestRoom));
       const mappedPlayers = buildPlayersFromRoundAndRoom(curRaw.participants, latestRoom.participants);
       setSubmitInfo(null);
       const finalizedStart = finalizePlayersForRound(roomIdNumber, cur.roundId, mappedPlayers);
@@ -1199,7 +1276,9 @@ export default function RoomDetailPage() {
         scheduleRoundAdvanceSync();
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : '그림 제출에 실패했습니다.');
+      const msg = e instanceof Error ? e.message : '그림 제출에 실패했습니다.';
+      setError(msg);
+      throw e instanceof Error ? e : new Error(msg);
     } finally {
       setLoadingSubmit(false);
     }
@@ -1218,14 +1297,16 @@ export default function RoomDetailPage() {
     <main className="relative min-h-[calc(100vh-4rem)] overflow-hidden text-white">
       {roundEndScoreboard ? (
         <RoundEndScoreboardOverlay
+          roomId={roomIdNumber}
+          totalRounds={roomCapacity?.totalRounds ?? undefined}
           board={roundEndScoreboard}
           advanceCountdownSec={roundAdvanceCountdownSec}
           winnerFallbackNickname={
             players.find((p) => p.id === submitInfo?.roundWinnerParticipantId)?.nickname ?? null
           }
-          onClose={({ gameFinished }) => {
+          onClose={({ gameFinished, openFinalRanking }) => {
             setRoundEndScoreboard(null);
-            if (gameFinished && roomIdNumber) {
+            if (gameFinished && roomIdNumber && openFinalRanking) {
               setFinalRankingBoard({ loading: true, rows: [] });
               void (async () => {
                 try {
@@ -1256,6 +1337,7 @@ export default function RoomDetailPage() {
           roundLabel={roundLabel}
           statusLabel={statusLabel}
           submitLabel={submitLabel}
+          roundTimerLabel={roundTimerLabel}
           isMyHost={isMyHost}
           hasAiPlayer={hasAiPlayer}
           aiActionDisabled={
@@ -1298,6 +1380,8 @@ export default function RoomDetailPage() {
             setError={setError}
             onSubmitDrawing={handleSubmitDrawing}
             loadingSubmit={loadingSubmit}
+          timeOverSignal={timeOverSignal}
+          myAlreadySubmitted={Boolean(myPlayer?.submitted)}
           />
           <PlayerColumn players={rightPlayers} />
         </section>
@@ -1306,115 +1390,260 @@ export default function RoomDetailPage() {
   );
 }
 
+const ROUND_END_RANKING_PREVIEW = 4;
+
 function RoundEndScoreboardOverlay({
+  roomId,
+  totalRounds,
   board,
   advanceCountdownSec,
   winnerFallbackNickname,
   onClose,
 }: {
+  roomId: number;
+  /** 방 설정 총 라운드(표시용). 없으면 생략 */
+  totalRounds?: number | null;
   board: RoundEndScoreboardState;
   advanceCountdownSec: number | null;
   winnerFallbackNickname: string | null;
-  onClose: (opts: { gameFinished: boolean }) => void;
+  onClose: (opts: { gameFinished: boolean; openFinalRanking: boolean }) => void;
 }) {
+  const [step, setStep] = useState<1 | 2>(1);
+  const [rankingRows, setRankingRows] = useState<FinalRankingRow[]>([]);
+  const [rankingLoading, setRankingLoading] = useState(false);
+  const [rankingError, setRankingError] = useState<string | undefined>();
+
   const winnerName =
     board.items.find((x) => x.winner)?.nickname ?? winnerFallbackNickname ?? '라운드 우승';
+
+  useEffect(() => {
+    setStep(1);
+    setRankingRows([]);
+    setRankingError(undefined);
+    setRankingLoading(false);
+  }, [board.closedRoundId]);
+
+  useEffect(() => {
+    if (step !== 2 || !Number.isFinite(roomId) || roomId <= 0) return;
+    let cancelled = false;
+    setRankingLoading(true);
+    setRankingError(undefined);
+    void (async () => {
+      try {
+        const list = await apiFetch<unknown[]>(`/api/rooms/${roomId}/ranking`, { method: 'GET' });
+        if (cancelled) return;
+        const rows = (Array.isArray(list) ? list : [])
+          .map(normalizeRankingRow)
+          .filter((x): x is FinalRankingRow => x != null);
+        setRankingRows(rows);
+      } catch (e) {
+        if (cancelled) return;
+        setRankingRows([]);
+        setRankingError(e instanceof Error ? e.message : '순위를 불러오지 못했습니다.');
+      } finally {
+        if (!cancelled) setRankingLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [step, roomId, board.closedRoundId]);
+
+  const previewRows = rankingRows.slice(0, ROUND_END_RANKING_PREVIEW);
+  const titleId = step === 1 ? 'round-scoreboard-title' : 'round-ranking-preview-title';
 
   return (
     <div
       className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-md"
       role="dialog"
       aria-modal="true"
-      aria-labelledby="round-scoreboard-title"
+      aria-labelledby={titleId}
     >
       <div className="max-h-[min(92vh,880px)] w-full max-w-4xl overflow-y-auto rounded-[1.75rem] border border-white/15 bg-slate-900/95 p-5 shadow-2xl sm:p-8">
-        <div className="mb-6 text-center">
-          <p className="text-xs font-bold uppercase tracking-[0.2em] text-blue-300/90">라운드 결과</p>
-          <h2 id="round-scoreboard-title" className="mt-2 text-2xl font-black text-white sm:text-3xl">
-            라운드 {board.roundNumber}
-            <span className="mx-2 text-slate-500">·</span>
-            <span className="bg-gradient-to-r from-cyan-200 to-violet-200 bg-clip-text text-transparent">
-              {board.keyword}
-            </span>
-          </h2>
-          <p className="mt-4 text-lg font-bold text-amber-200">
-            우승 <span className="text-white">{winnerName}</span> 님
-          </p>
-          {board.gameFinished ? (
-            <p className="mt-2 text-sm text-slate-400">게임이 종료되었습니다. 방 랭킹에서 전체 순위를 확인할 수 있습니다.</p>
-          ) : null}
-          {advanceCountdownSec != null && advanceCountdownSec > 0 ? (
-            <p className="mt-3 text-sm font-semibold text-cyan-200">
-              화면 전환까지{' '}
-              <span className="font-black tabular-nums text-white">{advanceCountdownSec}</span>초
-            </p>
-          ) : null}
-        </div>
-
-        {board.loading ? (
-          <div className="flex flex-col items-center justify-center gap-3 py-16 text-slate-400">
-            <div className="h-10 w-10 animate-spin rounded-full border-2 border-white/20 border-t-blue-400" />
-            <p className="text-sm font-medium">제출 그림·점수를 불러오는 중…</p>
-          </div>
-        ) : board.fetchError ? (
-          <p className="rounded-2xl border border-rose-500/30 bg-rose-500/10 px-4 py-6 text-center text-sm text-rose-200">
-            {board.fetchError}
-          </p>
-        ) : (
-          <div className="grid gap-4 sm:grid-cols-2">
-            {board.items.map((item) => (
-              (() => {
-                const imageSrc = resolveSubmissionImageSrc(item.imageData);
-                return (
-              <div
-                key={item.participantId}
-                className={`overflow-hidden rounded-2xl border bg-slate-950/60 shadow-lg ${
-                  item.winner
-                    ? 'border-amber-400/50 ring-2 ring-amber-400/25'
-                    : 'border-white/10'
-                }`}
-              >
-                <div className="flex items-center justify-between border-b border-white/10 px-3 py-2 sm:px-4">
-                  <span className="font-bold text-white">{item.nickname}</span>
-                  <span className="rounded-full bg-white/10 px-2.5 py-0.5 text-xs font-black text-cyan-200">
-                    {(item.score * 100).toFixed(0)}점
-                  </span>
-                </div>
-                <div className="relative aspect-square w-full bg-white">
-                  {imageSrc ? (
-                    <img
-                      src={imageSrc}
-                      alt={`${item.nickname} 제출`}
-                      className="h-full w-full object-contain"
-                    />
-                  ) : (
-                    <div className="flex h-full items-center justify-center text-sm text-slate-500">이미지 없음</div>
-                  )}
-                </div>
-                <p className="px-3 py-2 text-xs leading-relaxed text-slate-400 sm:px-4">
-                  AI: <span className="font-semibold text-slate-200">{item.aiAnswer}</span>
-                </p>
-                {item.winner ? (
-                  <p className="px-3 pb-3 text-center text-xs font-black uppercase tracking-wider text-amber-300 sm:px-4">
-                    ROUND WINNER
-                  </p>
+        {step === 1 ? (
+          <>
+            <div className="mb-6 text-center">
+              <p className="text-xs font-bold uppercase tracking-[0.2em] text-blue-300/90">라운드 결과</p>
+              <h2 id="round-scoreboard-title" className="mt-2 text-2xl font-black text-white sm:text-3xl">
+                라운드{' '}
+                {board.roundNumber}
+                {typeof totalRounds === 'number' && totalRounds > 0 ? (
+                  <span className="font-bold text-slate-400">/{totalRounds}</span>
                 ) : null}
-              </div>
-                );
-              })()
-            ))}
-          </div>
-        )}
+                <span className="mx-2 text-slate-500">·</span>
+                <span className="bg-gradient-to-r from-cyan-200 to-violet-200 bg-clip-text text-transparent">
+                  {board.keyword}
+                </span>
+              </h2>
+              <p className="mt-4 text-lg font-bold text-amber-200">
+                우승 <span className="text-white">{winnerName}</span> 님
+              </p>
+              {board.gameFinished ? (
+                <p className="mt-2 text-sm text-slate-400">
+                  게임이 종료되었습니다. 아래에서 누적 순위를 확인한 뒤 최종 화면으로 이동할 수 있습니다.
+                </p>
+              ) : null}
+              {advanceCountdownSec != null && advanceCountdownSec > 0 ? (
+                <p className="mt-3 text-sm font-semibold text-cyan-200">
+                  화면 전환까지{' '}
+                  <span className="font-black tabular-nums text-white">{advanceCountdownSec}</span>초
+                </p>
+              ) : null}
+            </div>
 
-        <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
-          <button
-            type="button"
-            onClick={() => onClose({ gameFinished: board.gameFinished })}
-            className="rounded-2xl bg-gradient-to-r from-blue-500 to-violet-500 px-8 py-3 text-sm font-black text-white shadow-lg transition hover:from-blue-400 hover:to-violet-400"
-          >
-            {board.gameFinished ? '닫고 최종 순위 보기' : '닫기'}
-          </button>
-        </div>
+            {board.loading ? (
+              <div className="flex flex-col items-center justify-center gap-3 py-16 text-slate-400">
+                <div className="h-10 w-10 animate-spin rounded-full border-2 border-white/20 border-t-blue-400" />
+                <p className="text-sm font-medium">제출 그림·점수를 불러오는 중…</p>
+              </div>
+            ) : board.fetchError ? (
+              <p className="rounded-2xl border border-rose-500/30 bg-rose-500/10 px-4 py-6 text-center text-sm text-rose-200">
+                {board.fetchError}
+              </p>
+            ) : (
+              <div className="grid gap-4 sm:grid-cols-2">
+                {board.items.map((item) => (
+                  (() => {
+                    const imageSrc = resolveSubmissionImageSrc(item.imageData);
+                    return (
+                  <div
+                    key={item.participantId}
+                    className={`overflow-hidden rounded-2xl border bg-slate-950/60 shadow-lg ${
+                      item.winner
+                        ? 'border-amber-400/50 ring-2 ring-amber-400/25'
+                        : 'border-white/10'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between border-b border-white/10 px-3 py-2 sm:px-4">
+                      <span className="font-bold text-white">{item.nickname}</span>
+                      <span className="rounded-full bg-white/10 px-2.5 py-0.5 text-xs font-black text-cyan-200">
+                        {(item.score * 100).toFixed(0)}점
+                      </span>
+                    </div>
+                    <div className="relative aspect-square w-full bg-white">
+                      {imageSrc ? (
+                        <img
+                          src={imageSrc}
+                          alt={`${item.nickname} 제출`}
+                          className="h-full w-full object-contain"
+                        />
+                      ) : (
+                        <div className="flex h-full items-center justify-center text-sm text-slate-500">이미지 없음</div>
+                      )}
+                    </div>
+                    <p className="px-3 py-2 text-xs leading-relaxed text-slate-400 sm:px-4">
+                      AI: <span className="font-semibold text-slate-200">{item.aiAnswer}</span>
+                    </p>
+                    {item.winner ? (
+                      <p className="px-3 pb-3 text-center text-xs font-black uppercase tracking-wider text-amber-300 sm:px-4">
+                        ROUND WINNER
+                      </p>
+                    ) : null}
+                  </div>
+                    );
+                  })()
+                ))}
+              </div>
+            )}
+
+            <div className="mt-8 flex flex-col items-stretch justify-center gap-3 sm:flex-row sm:items-center sm:justify-center">
+              <button
+                type="button"
+                onClick={() => setStep(2)}
+                disabled={board.loading}
+                className="rounded-2xl bg-gradient-to-r from-cyan-500 to-blue-600 px-8 py-3 text-sm font-black text-white shadow-lg transition hover:from-cyan-400 hover:to-blue-500 disabled:opacity-50"
+              >
+                순위 보기
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  onClose({ gameFinished: board.gameFinished, openFinalRanking: board.gameFinished })
+                }
+                className="rounded-2xl border border-white/20 bg-white/5 px-8 py-3 text-sm font-bold text-slate-200 transition hover:bg-white/10"
+              >
+                {board.gameFinished ? '건너뛰고 최종 순위로' : '닫기'}
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="mb-6 text-center">
+              <p className="text-xs font-bold uppercase tracking-[0.2em] text-violet-300/90">누적 순위</p>
+              <h2 id="round-ranking-preview-title" className="mt-2 text-2xl font-black text-white sm:text-3xl">
+                지금까지 라운드 승 수
+              </h2>
+              <p className="mt-2 text-sm text-slate-400">
+                상위 {ROUND_END_RANKING_PREVIEW}명까지 표시합니다. 게임이 끝난 뒤에는 전체 순위 화면에서 자세히 볼 수
+                있어요.
+              </p>
+            </div>
+
+            {rankingLoading ? (
+              <div className="flex flex-col items-center justify-center gap-3 py-16 text-slate-400">
+                <div className="h-10 w-10 animate-spin rounded-full border-2 border-white/20 border-t-violet-400" />
+                <p className="text-sm font-medium">순위를 불러오는 중…</p>
+              </div>
+            ) : rankingError ? (
+              <p className="rounded-2xl border border-rose-500/30 bg-rose-500/10 px-4 py-6 text-center text-sm text-rose-200">
+                {rankingError}
+              </p>
+            ) : previewRows.length === 0 ? (
+              <p className="py-10 text-center text-sm text-slate-400">표시할 순위가 없습니다.</p>
+            ) : (
+              <ol className="mx-auto max-w-lg space-y-2">
+                {previewRows.map((row, index) => {
+                  const rank = index + 1;
+                  const medal =
+                    rank === 1 ? '🥇' : rank === 2 ? '🥈' : rank === 3 ? '🥉' : `${rank}`;
+                  return (
+                    <li
+                      key={row.userId}
+                      className="flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-slate-950/50 px-4 py-3.5"
+                    >
+                      <div className="flex min-w-0 flex-1 items-center gap-3">
+                        <span className="w-8 shrink-0 text-center text-lg">{medal}</span>
+                        <div className="min-w-0">
+                          <p className="truncate font-bold text-white">{row.nickname}</p>
+                          <p className="text-xs text-slate-500">누적 라운드 승</p>
+                        </div>
+                      </div>
+                      <span className="shrink-0 text-lg font-black tabular-nums text-cyan-200">
+                        {row.roundWinCount}회
+                      </span>
+                    </li>
+                  );
+                })}
+              </ol>
+            )}
+
+            <div className="mt-8 flex flex-col items-stretch justify-center gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-center">
+              <button
+                type="button"
+                onClick={() => setStep(1)}
+                className="rounded-2xl border border-white/20 bg-white/5 px-8 py-3 text-sm font-bold text-slate-200 transition hover:bg-white/10"
+              >
+                이전
+              </button>
+              {board.gameFinished ? (
+                <button
+                  type="button"
+                  onClick={() => onClose({ gameFinished: true, openFinalRanking: true })}
+                  className="rounded-2xl bg-gradient-to-r from-amber-500 to-orange-500 px-8 py-3 text-sm font-black text-slate-950 shadow-lg transition hover:from-amber-400 hover:to-orange-400"
+                >
+                  최종 순위 전체 보기
+                </button>
+              ) : null}
+              <button
+                type="button"
+                onClick={() => onClose({ gameFinished: board.gameFinished, openFinalRanking: false })}
+                className="rounded-2xl bg-gradient-to-r from-blue-500 to-violet-500 px-8 py-3 text-sm font-black text-white shadow-lg transition hover:from-blue-400 hover:to-violet-400"
+              >
+                닫기
+              </button>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
@@ -1526,6 +1755,7 @@ function TopHud({
   roundLabel,
   statusLabel,
   submitLabel,
+  roundTimerLabel,
   isMyHost,
   hasAiPlayer,
   aiActionDisabled,
@@ -1542,6 +1772,7 @@ function TopHud({
   roundLabel: string;
   statusLabel: string;
   submitLabel: string;
+  roundTimerLabel: string | null;
   isMyHost: boolean;
   hasAiPlayer: boolean;
   aiActionDisabled: boolean;
@@ -1556,15 +1787,26 @@ function TopHud({
 }) {
   return (
     <header className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 shadow-2xl backdrop-blur sm:rounded-[2rem] sm:px-6 sm:py-4">
-      <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
-        <div className="flex flex-wrap items-center gap-3">
+      <div className="grid grid-cols-1 gap-3 sm:gap-4 xl:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] xl:items-center">
+        <div className="flex flex-wrap items-center gap-3 xl:min-w-0">
           <InfoChip label={`방 #${roomId}`} />
           <InfoChip label={roundLabel} />
           <InfoChip label={statusLabel} tone={statusLabel === '진행중' ? 'green' : 'default'} />
           <InfoChip label={submitLabel} tone="blue" />
         </div>
 
-        <div className="flex flex-wrap justify-end gap-3">
+        <div className="flex shrink-0 justify-center xl:px-2" role="timer" aria-live="polite">
+          {roundTimerLabel ? (
+            <div className="rounded-2xl border border-cyan-300/40 bg-cyan-500/10 px-5 py-2.5 text-center shadow-lg shadow-cyan-500/5 sm:py-3">
+              <p className="text-[10px] font-black uppercase tracking-[0.24em] text-cyan-200 sm:text-[11px]">남은 시간</p>
+              <p className="mt-0.5 text-3xl font-black tabular-nums tracking-tight text-cyan-100 sm:text-4xl">
+                {roundTimerLabel}
+              </p>
+            </div>
+          ) : null}
+        </div>
+
+        <div className="flex flex-wrap items-center justify-end gap-3 xl:min-w-0">
           {isMyHost ? (
             <button
               type="button"
@@ -1717,6 +1959,8 @@ function GameBoard({
   setError,
   onSubmitDrawing,
   loadingSubmit,
+  timeOverSignal,
+  myAlreadySubmitted,
 }: {
   keyword: string;
   /** 라운드가 바뀌면 캔버스를 비움 (다음 라운드·로비 전환) */
@@ -1729,6 +1973,8 @@ function GameBoard({
   setError: (msg: string) => void;
   onSubmitDrawing: (imageData: string) => void | Promise<void>;
   loadingSubmit: boolean;
+  timeOverSignal: number;
+  myAlreadySubmitted: boolean;
 }) {
   const canvasRef = useRef<DrawingCanvasHandle>(null);
   const [brush, setBrush] = useState<BrushKind>('pen');
@@ -1736,6 +1982,8 @@ function GameBoard({
   const [lineWidth, setLineWidth] = useState(8);
   const [chatInput, setChatInput] = useState('');
   const [submitConfirmOpen, setSubmitConfirmOpen] = useState(false);
+  const submitConfirmLockRef = useRef(false);
+  const lastTimeOverSignalRef = useRef(0);
   const isEraser = brush === 'eraser';
   const isHighlighter = brush === 'highlighter';
   const effectiveLineWidth = isHighlighter ? Math.round(lineWidth * 1.8) : lineWidth;
@@ -1744,6 +1992,18 @@ function GameBoard({
   useEffect(() => {
     canvasRef.current?.clear();
   }, [activeRoundId]);
+
+  useEffect(() => {
+    if (timeOverSignal <= 0) return;
+    if (timeOverSignal === lastTimeOverSignalRef.current) return;
+    lastTimeOverSignalRef.current = timeOverSignal;
+    if (loadingSubmit || myAlreadySubmitted) return;
+
+    const api = canvasRef.current;
+    if (!api) return;
+    // 타임오버 시에는 그림 유무와 관계없이 현재 캔버스를 자동 제출한다.
+    void onSubmitDrawing(api.toDataUrl());
+  }, [timeOverSignal, loadingSubmit, myAlreadySubmitted, onSubmitDrawing]);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -1789,16 +2049,24 @@ function GameBoard({
     setSubmitConfirmOpen(true);
   }
 
-  function confirmSubmit() {
+  async function confirmSubmit() {
+    if (submitConfirmLockRef.current) return;
     const api = canvasRef.current;
     if (!api?.getHasDrawing()) {
       setSubmitConfirmOpen(false);
       setError('캔버스에 그림을 그린 뒤 제출해 주세요.');
       return;
     }
-    setSubmitConfirmOpen(false);
+    submitConfirmLockRef.current = true;
     setError('');
-    void onSubmitDrawing(api.toDataUrl());
+    try {
+      await onSubmitDrawing(api.toDataUrl());
+    } catch {
+      // 오류 문구는 상위에서 setError 처리
+    } finally {
+      submitConfirmLockRef.current = false;
+      setSubmitConfirmOpen(false);
+    }
   }
 
   function handleSendChatClick() {
@@ -1810,11 +2078,21 @@ function GameBoard({
 
   return (
     <section className="rounded-2xl border border-white/10 bg-white/[0.04] p-4 shadow-2xl backdrop-blur sm:rounded-[2rem] sm:p-5">
-      <div className="flex flex-col gap-2.5 rounded-xl border border-white/10 bg-slate-900/70 p-4 sm:gap-3 sm:rounded-[1.5rem] sm:p-5">
+      <div className="relative flex flex-col gap-2.5 overflow-hidden rounded-xl border border-white/10 bg-slate-900/70 p-4 sm:gap-3 sm:rounded-[1.5rem] sm:p-5">
+        {loadingSubmit && !submitConfirmOpen ? (
+          <div
+            className="absolute inset-0 z-[35] flex flex-col items-center justify-center gap-3 rounded-[inherit] bg-slate-950/65 px-6 backdrop-blur-sm"
+            role="status"
+            aria-live="assertive"
+            aria-busy="true"
+          >
+            <SubmitInProgressPanel />
+          </div>
+        ) : null}
         <div className="flex flex-col gap-2 sm:gap-3">
           {keyword ? (
-            <div className="flex justify-center">
-              <div className="rounded-xl border border-blue-400/30 bg-blue-500/10 px-4 py-2.5 text-center sm:rounded-2xl sm:px-5 sm:py-3">
+            <div className="flex min-h-[4.5rem] items-start justify-center sm:min-h-[5rem]">
+              <div className="max-w-[min(100%,28rem)] rounded-xl border border-blue-400/30 bg-blue-500/10 px-4 py-2.5 text-center sm:rounded-2xl sm:px-5 sm:py-3">
                 <p className="text-[10px] font-black uppercase tracking-[0.28em] text-blue-200 sm:text-[11px] sm:tracking-[0.3em]">
                   제시어
                 </p>
@@ -1870,6 +2148,7 @@ function GameBoard({
           canRedo={Boolean(canvasRef.current?.canRedo())}
           onSubmit={handleSubmitClick}
           loadingSubmit={loadingSubmit}
+          interactionLocked={loadingSubmit}
         />
         <div className="flex items-center gap-2 rounded-2xl border border-white/10 bg-slate-950/60 p-3">
           <span className={`text-xs font-semibold ${chatConnected ? 'text-emerald-300' : 'text-slate-400'}`}>
@@ -1902,11 +2181,12 @@ function GameBoard({
         <ConfirmModal
           title="그림 제출"
           description="정말 제출할까요? 제출 후에는 수정할 수 없습니다."
-          confirmLabel={loadingSubmit ? '제출 중...' : '제출하기'}
+          confirmLabel={loadingSubmit ? '제출 중…' : '제출하기'}
           cancelLabel="취소"
+          busy={loadingSubmit}
           disabled={loadingSubmit}
           onCancel={() => setSubmitConfirmOpen(false)}
-          onConfirm={confirmSubmit}
+          onConfirm={() => void confirmSubmit()}
         />
       ) : null}
     </section>
@@ -1927,6 +2207,7 @@ function DrawingToolbar({
   canRedo,
   onSubmit,
   loadingSubmit,
+  interactionLocked,
 }: {
   brush: BrushKind;
   onBrushChange: (b: BrushKind) => void;
@@ -1941,6 +2222,8 @@ function DrawingToolbar({
   canRedo: boolean;
   onSubmit: () => void;
   loadingSubmit: boolean;
+  /** 제출 중 도구 조작 비활성화(자동 제출 등 모달 없이 진행될 때) */
+  interactionLocked: boolean;
 }) {
   const [openHelp, setOpenHelp] = useState<null | 'undo' | 'redo'>(null);
 
@@ -1967,30 +2250,51 @@ function DrawingToolbar({
       <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
         <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
           <div className="flex flex-wrap items-center gap-3">
-            <ToolButton label="펜" active={brush === 'pen'} onClick={() => onBrushChange('pen')} />
-            <ToolButton label="형광펜" active={brush === 'highlighter'} onClick={() => onBrushChange('highlighter')} />
-            <ToolButton label="지우개" active={brush === 'eraser'} onClick={() => onBrushChange('eraser')} />
+            <ToolButton
+              label="펜"
+              active={brush === 'pen'}
+              disabled={interactionLocked}
+              onClick={() => onBrushChange('pen')}
+            />
+            <ToolButton
+              label="형광펜"
+              active={brush === 'highlighter'}
+              disabled={interactionLocked}
+              onClick={() => onBrushChange('highlighter')}
+            />
+            <ToolButton
+              label="지우개"
+              active={brush === 'eraser'}
+              disabled={interactionLocked}
+              onClick={() => onBrushChange('eraser')}
+            />
           </div>
           <div className="flex flex-wrap items-center gap-2">
             {PALETTE.map((p) => (
               <button
                 key={p.color}
                 type="button"
+                disabled={interactionLocked}
                 onClick={() => onStrokeColorChange(p.color)}
-                className={`h-8 w-8 rounded-full border transition ${
+                className={`h-8 w-8 rounded-full border transition disabled:opacity-40 ${
                   strokeColor === p.color ? 'border-white ring-2 ring-white/30' : 'border-white/15'
                 }`}
                 style={{ backgroundColor: p.color }}
                 aria-label={`색상 ${p.name}`}
               />
             ))}
-            <label className="ml-1 flex items-center gap-2 rounded-2xl border border-white/10 bg-slate-900/60 px-3 py-2 text-xs font-bold text-slate-200">
+            <label
+              className={`ml-1 flex items-center gap-2 rounded-2xl border border-white/10 bg-slate-900/60 px-3 py-2 text-xs font-bold text-slate-200 ${
+                interactionLocked ? 'pointer-events-none opacity-40' : ''
+              }`}
+            >
               커스텀
               <input
                 type="color"
                 value={strokeColor}
+                disabled={interactionLocked}
                 onChange={(e) => onStrokeColorChange(e.target.value)}
-                className="h-6 w-8 cursor-pointer rounded"
+                className="h-6 w-8 cursor-pointer rounded disabled:cursor-not-allowed"
                 aria-label="커스텀 색상"
               />
             </label>
@@ -2003,8 +2307,9 @@ function DrawingToolbar({
               max={28}
               step={2}
               value={lineWidth}
+              disabled={interactionLocked}
               onChange={(e) => onLineWidthChange(Number(e.target.value))}
-              className="h-2 w-[min(100%,140px)] cursor-pointer accent-blue-500 sm:w-32"
+              className="h-2 w-[min(100%,140px)] cursor-pointer accent-blue-500 disabled:cursor-not-allowed sm:w-32"
               aria-label="펜 굵기"
             />
             <span className="w-10 shrink-0 text-right font-mono text-xs font-bold text-slate-200">{lineWidth}px</span>
@@ -2031,7 +2336,7 @@ function DrawingToolbar({
               <button
                 type="button"
                 onClick={onUndo}
-                disabled={!canUndo}
+                disabled={!canUndo || interactionLocked}
                 className="min-w-[104px] whitespace-nowrap rounded-2xl border border-white/10 bg-slate-900/60 px-4 py-2.5 text-sm font-bold leading-none text-slate-200 transition hover:bg-slate-800/60 hover:border-blue-300/30 disabled:opacity-50"
               >
                 실행 취소
@@ -2056,7 +2361,7 @@ function DrawingToolbar({
               <button
                 type="button"
                 onClick={onRedo}
-                disabled={!canRedo}
+                disabled={!canRedo || interactionLocked}
                 className="min-w-[104px] whitespace-nowrap rounded-2xl border border-white/10 bg-slate-900/60 px-4 py-2.5 text-sm font-bold leading-none text-slate-200 transition hover:bg-slate-800/60 hover:border-blue-300/30 disabled:opacity-50"
               >
                 다시 실행
@@ -2084,7 +2389,8 @@ function DrawingToolbar({
           <button
             type="button"
             onClick={onClear}
-            className="rounded-2xl border border-white/10 bg-slate-900/60 px-5 py-3 text-sm font-bold text-slate-200 transition hover:bg-slate-800/60 hover:border-blue-300/30"
+            disabled={interactionLocked}
+            className="rounded-2xl border border-white/10 bg-slate-900/60 px-5 py-3 text-sm font-bold text-slate-200 transition hover:bg-slate-800/60 hover:border-blue-300/30 disabled:opacity-45"
           >
             초기화
           </button>
@@ -2092,9 +2398,20 @@ function DrawingToolbar({
           <button
             type="button"
             onClick={onSubmit}
-            className="rounded-2xl bg-gradient-to-r from-blue-500 to-violet-500 px-7 py-3 text-sm font-black text-white shadow-lg shadow-blue-500/20 transition hover:from-blue-400 hover:to-violet-400"
+            disabled={interactionLocked || loadingSubmit}
+            className="relative overflow-hidden rounded-2xl bg-gradient-to-r from-blue-500 to-violet-500 px-7 py-3 text-sm font-black text-white shadow-lg shadow-blue-500/25 transition hover:from-blue-400 hover:to-violet-400 disabled:opacity-85"
           >
-            {loadingSubmit ? '제출 중...' : '그림 제출'}
+            {loadingSubmit ? (
+              <span className="relative z-[1] flex items-center justify-center gap-2">
+                <span
+                  className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-white/35 border-t-white"
+                  aria-hidden
+                />
+                제출 중…
+              </span>
+            ) : (
+              '그림 제출'
+            )}
           </button>
         </div>
       </div>
@@ -2105,17 +2422,20 @@ function DrawingToolbar({
 function ToolButton({
   label,
   active = false,
+  disabled = false,
   onClick,
 }: {
   label: string;
   active?: boolean;
+  disabled?: boolean;
   onClick: () => void;
 }) {
   return (
     <button
       type="button"
+      disabled={disabled}
       onClick={onClick}
-      className={`rounded-2xl px-4 py-3 text-sm font-bold transition ${
+      className={`rounded-2xl px-4 py-3 text-sm font-bold transition disabled:opacity-45 ${
         active
           ? 'bg-blue-500 text-white'
           : 'border border-white/10 bg-slate-900/60 text-slate-200 hover:bg-slate-800/60 hover:border-blue-300/30'
@@ -2143,11 +2463,37 @@ function HelpPopover({ title, lines }: { title: string; lines: string[] }) {
   );
 }
 
+function SpinnerRing({ className }: { className?: string }) {
+  return (
+    <span
+      className={`inline-block shrink-0 animate-spin rounded-full border-[3px] border-white/25 border-t-cyan-200 ${className ?? 'h-8 w-8'}`}
+      aria-hidden
+    />
+  );
+}
+
+function SubmitInProgressPanel({
+  subtitle = '완료될 때까지 창을 닫지 마세요.',
+}: {
+  subtitle?: string;
+}) {
+  return (
+    <div className="flex max-w-[min(100%,22rem)] flex-col items-center gap-3 rounded-2xl border border-cyan-400/35 bg-slate-900/95 px-7 py-7 text-center shadow-2xl shadow-cyan-500/20 ring-1 ring-cyan-400/25">
+      <SpinnerRing className="h-11 w-11 border-[4px]" />
+      <p className="text-[15px] font-black leading-snug tracking-tight text-white sm:text-lg">
+        그림을 서버로 보내는 중이에요
+      </p>
+      <p className="text-xs font-medium leading-relaxed text-slate-400 sm:text-sm">{subtitle}</p>
+    </div>
+  );
+}
+
 function ConfirmModal({
   title,
   description,
   confirmLabel,
   cancelLabel,
+  busy,
   disabled,
   onCancel,
   onConfirm,
@@ -2156,62 +2502,82 @@ function ConfirmModal({
   description: string;
   confirmLabel: string;
   cancelLabel: string;
+  busy?: boolean;
   disabled?: boolean;
   onCancel: () => void;
   onConfirm: () => void;
 }) {
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onCancel();
+      if (e.key === 'Escape') {
+        if (busy) return;
+        onCancel();
+      }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [onCancel]);
+  }, [busy, onCancel]);
 
   return (
     <div
-      className="fixed inset-0 z-[95] flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-sm"
+      className="fixed inset-0 z-[95] flex items-center justify-center bg-slate-950/75 p-4 backdrop-blur-[3px]"
       role="dialog"
       aria-modal="true"
+      aria-busy={busy ? 'true' : undefined}
       aria-label={title}
-      onClick={onCancel}
+      onClick={() => {
+        if (!busy) onCancel();
+      }}
     >
       <div
-        className="w-full max-w-sm rounded-2xl border border-white/10 bg-slate-900/95 p-5 shadow-2xl"
+        className={`w-full max-w-sm rounded-2xl border border-white/10 bg-slate-900/95 p-5 shadow-2xl ${busy ? 'ring-2 ring-cyan-400/30' : ''}`}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-start justify-between gap-3">
-          <div>
+          <div className="min-w-0 flex-1">
             <p className="text-sm font-black text-white">{title}</p>
-            <p className="mt-2 text-sm leading-relaxed text-slate-300">{description}</p>
+            {!busy ? (
+              <p className="mt-2 text-sm leading-relaxed text-slate-300">{description}</p>
+            ) : (
+              <div className="mt-5 flex flex-col items-center gap-4 pb-1 pt-2">
+                <SpinnerRing className="h-10 w-10 border-[3px]" />
+                <p className="text-center text-sm leading-relaxed text-slate-400">
+                  이미지를 업로드하고 있어요. 네트워크에 따라 잠시 걸릴 수 있어요.
+                </p>
+              </div>
+            )}
           </div>
-          <button
-            type="button"
-            onClick={onCancel}
-            className="rounded-lg px-2 py-1 text-slate-300 transition hover:bg-white/10 hover:text-white"
-            aria-label="닫기"
-          >
-            ✕
-          </button>
+          {!busy ? (
+            <button
+              type="button"
+              onClick={onCancel}
+              className="shrink-0 rounded-lg px-2 py-1 text-slate-300 transition hover:bg-white/10 hover:text-white"
+              aria-label="닫기"
+            >
+              ✕
+            </button>
+          ) : null}
         </div>
 
-        <div className="mt-5 flex gap-2">
-          <button
-            type="button"
-            onClick={onCancel}
-            className="flex-1 rounded-xl border border-white/15 bg-white/5 px-4 py-2.5 text-sm font-bold text-slate-200 transition hover:bg-white/10"
-          >
-            {cancelLabel}
-          </button>
-          <button
-            type="button"
-            onClick={onConfirm}
-            disabled={Boolean(disabled)}
-            className="flex-1 rounded-xl bg-gradient-to-r from-blue-500 to-violet-500 px-4 py-2.5 text-sm font-black text-white shadow-lg shadow-blue-500/20 transition hover:from-blue-400 hover:to-violet-400 disabled:opacity-50"
-          >
-            {confirmLabel}
-          </button>
-        </div>
+        {!busy ? (
+          <div className="mt-5 flex gap-2">
+            <button
+              type="button"
+              onClick={onCancel}
+              className="flex-1 rounded-xl border border-white/15 bg-white/5 px-4 py-2.5 text-sm font-bold text-slate-200 transition hover:bg-white/10"
+            >
+              {cancelLabel}
+            </button>
+            <button
+              type="button"
+              onClick={onConfirm}
+              disabled={Boolean(disabled)}
+              className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-blue-500 to-violet-500 px-4 py-2.5 text-sm font-black text-white shadow-lg shadow-blue-500/25 transition hover:from-blue-400 hover:to-violet-400 disabled:opacity-60"
+            >
+              {confirmLabel}
+            </button>
+          </div>
+        ) : null}
       </div>
     </div>
   );

@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
+import { ProfileImage } from '@/components/ProfileImage';
 import { apiFetch, getHttpStatus } from '@/lib/api-client';
 import { clearAuthSession, isUnauthorizedStatus } from '@/lib/auth-session';
 
@@ -446,8 +447,8 @@ export default function FriendsPage() {
                     onClick={() => void openUserDetail(searchResult.id)}
                     className="flex items-center gap-3 rounded-lg px-1 py-1 text-left transition hover:bg-white/5"
                   >
-                    <img
-                      src={searchResult.profileImageUrl || '/default-profile.png'}
+                    <ProfileImage
+                      src={searchResult.profileImageUrl}
                       alt="검색 유저 프로필"
                       className="h-12 w-12 rounded-full border border-white/20 object-cover"
                     />
@@ -632,7 +633,7 @@ function UserCell({
       onClick={() => onOpen(userId)}
       className="flex items-center gap-3 rounded-lg px-1 py-1 text-left transition hover:bg-white/5"
     >
-      <img src={imageUrl || '/default-profile.png'} alt="프로필" className="h-10 w-10 rounded-full border border-white/20 object-cover" />
+      <ProfileImage src={imageUrl} alt="프로필" className="h-10 w-10 rounded-full border border-white/20 object-cover" />
       <p className="font-bold text-white">{nickname}</p>
     </button>
   );
@@ -717,8 +718,8 @@ function UserDetailModal({
         ) : (
           <>
             <div className="flex items-center gap-3">
-              <img
-                src={user.profileImageUrl || '/default-profile.png'}
+              <ProfileImage
+                src={user.profileImageUrl}
                 alt="유저 프로필"
                 className="h-16 w-16 rounded-full border border-white/20 object-cover"
               />

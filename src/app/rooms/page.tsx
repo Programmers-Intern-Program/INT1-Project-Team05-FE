@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { apiFetch, getHttpStatus } from '@/lib/api-client';
 import { clearAuthSession, isUnauthorizedStatus } from '@/lib/auth-session';
 
@@ -18,8 +18,10 @@ type Room = {
 export default function RoomsPage() {
   const router = useRouter();
   const [rooms, setRooms] = useState<Room[]>([]);
+  const [ghostSuppressedIds, setGhostSuppressedIds] = useState<Set<number>>(new Set());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const ghostCandidateSinceRef = useRef<Map<number, number>>(new Map());
 
   const [showCreate, setShowCreate] = useState(false);
   const [title, setTitle] = useState('');
@@ -28,13 +30,14 @@ export default function RoomsPage() {
   const [password, setPassword] = useState('');
 
   /**
-   * 유령 방 완화:
-   * - 참가자 0명은 숨김
-   * - 진행 중인데 1명 이하로 남은 비정상 방도 숨김
+   * 유령 방 완화(절충안):
+   * - 참가자 0명은 즉시 숨김
+   * - 진행 중 + 1명 이하 방은 즉시 숨기지 않고, 일정 시간(8초) 이상 지속될 때만 숨김
+   *   (호스트 이탈 직후의 정상 전환은 보이고, 오래 남는 유령 방만 제거)
    */
   const lobbyRooms = useMemo(
-    () => rooms.filter((r) => r.curPlayers > 0 && !(r.isPlaying && r.curPlayers <= 1)),
-    [rooms],
+    () => rooms.filter((r) => r.curPlayers > 0 && !ghostSuppressedIds.has(r.roomId)),
+    [rooms, ghostSuppressedIds],
   );
 
   const stats = useMemo(() => {
@@ -62,6 +65,35 @@ export default function RoomsPage() {
       setLoading(false);
     }
   }
+
+  useEffect(() => {
+    const now = Date.now();
+    const liveIds = new Set(rooms.map((r) => r.roomId));
+    const nextSuppressed = new Set<number>();
+    const map = ghostCandidateSinceRef.current;
+
+    // 현재 목록에 없는 방은 추적 상태 정리
+    for (const roomId of map.keys()) {
+      if (!liveIds.has(roomId)) {
+        map.delete(roomId);
+      }
+    }
+
+    for (const room of rooms) {
+      const isGhostCandidate = room.isPlaying && room.curPlayers <= 1;
+      if (!isGhostCandidate) {
+        map.delete(room.roomId);
+        continue;
+      }
+      const firstSeenAt = map.get(room.roomId) ?? now;
+      if (!map.has(room.roomId)) map.set(room.roomId, firstSeenAt);
+      if (now - firstSeenAt >= 8_000) {
+        nextSuppressed.add(room.roomId);
+      }
+    }
+
+    setGhostSuppressedIds(nextSuppressed);
+  }, [rooms]);
 
   useEffect(() => {
     const initialTimer = window.setTimeout(() => {

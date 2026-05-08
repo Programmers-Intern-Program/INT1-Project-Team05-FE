@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { ProfileImage } from '@/components/ProfileImage';
 import { apiFetch, getHttpStatus } from '@/lib/api-client';
 import { clearAuthSession, isUnauthorizedStatus } from '@/lib/auth-session';
 
@@ -234,8 +235,8 @@ export default function MyPage() {
             <section className="rounded-2xl border border-white/10 bg-white/[0.04] p-6 lg:col-span-2">
               <h2 className="text-xl font-bold">프로필 이미지</h2>
               <div className="mt-4 flex flex-wrap items-center gap-4">
-                <img
-                  src={user.profileImageUrl || '/default-profile.png'}
+                <ProfileImage
+                  src={user.profileImageUrl}
                   alt="프로필"
                   className="h-24 w-24 rounded-full border border-white/20 object-cover"
                 />
