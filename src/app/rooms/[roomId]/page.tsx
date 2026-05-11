@@ -1,10 +1,10 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { startTransition, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
+import { createPortal } from 'react-dom';
 import type { DrawingCanvasHandle } from '@/components/DrawingCanvas';
 import { DrawingCanvas } from '@/components/DrawingCanvas';
-import PlayerChatBubble from '@/components/PlayerChatBubble';
 import { ProfileImage } from '@/components/ProfileImage';
 import { useRoomStomp, type RoomStompDestination } from '@/hooks/useRoomStomp';
 import { apiFetch, getHttpStatus } from '@/lib/api-client';
@@ -20,7 +20,6 @@ type Player = {
   isAi: boolean;
   submitted: boolean;
   roundWinCount: number;
-  bubble?: string;
   /** `GET /api/user/{userId}` 로 채움 — 마이페이지에서 프로필 사진 변경 후에도 탭 복귀 시 갱신 */
   profileImageUrl?: string | null;
 };
@@ -159,6 +158,17 @@ type ChatMessageDtoWs = {
   sender?: string;
   message?: string;
 };
+
+/** 방 채팅 패널(로그) 한 줄 — 백엔드가 TALK를 연속 브로드캐스트(빠른 필터 → AI 검열)할 수 있음 */
+type RoomChatLogEntry = {
+  id: string;
+  at: number;
+  kind: 'TALK' | 'NOTICE';
+  sender: string;
+  message: string;
+};
+
+const MAX_ROOM_CHAT_MESSAGES = 200;
 
 /** GET /api/rounds/{roundId}/submissions — 종료 라운드 점수판·그림 */
 type RoundSubmissionItem = {
@@ -554,7 +564,7 @@ function participantNicknameHintsFromPlayers(playersSnapshot: readonly Player[])
 }
 
 /**
- * 말풍선·AI 표시 등만 이전 행을 이어 붙이고, 제출 여부는 mapped만 따른다.
+ * 프로필 URL 등만 이전 행을 이어 붙이고, 제출 여부는 mapped만 따른다.
  * (이전 라운드 submitted를 OR로 유지하면 새 라운드에서도 제출 완료로 고정되는 버그가 난다.)
  *
  * 로비에서는 `id === userId`, 라운드 진행 중에는 `id === participantId`라서
@@ -575,7 +585,6 @@ function mergePlayersKeepSubmitted(prev: Player[], mapped: Player[]): Player[] {
     return {
       ...p,
       submitted: Boolean(p.submitted),
-      bubble: old?.bubble,
       isAi: p.isAi ?? old?.isAi ?? false,
       profileImageUrl: old?.profileImageUrl ?? p.profileImageUrl,
     };
@@ -635,7 +644,9 @@ export default function RoomDetailPage() {
   const params = useParams<{ roomId: string }>();
   const router = useRouter();
   const routerRef = useRef(router);
-  routerRef.current = router;
+  useEffect(() => {
+    routerRef.current = router;
+  }, [router]);
   const roomId = params?.roomId ?? '';
   const roomIdNumber = Number(roomId);
 
@@ -716,7 +727,7 @@ export default function RoomDetailPage() {
   const [loadingAiAction, setLoadingAiAction] = useState(false);
   const [leavingRoom, setLeavingRoom] = useState(false);
   const [error, setError] = useState('');
-  const [stompChatLine, setStompChatLine] = useState<string | null>(null);
+  const [roomChatMessages, setRoomChatMessages] = useState<RoomChatLogEntry[]>([]);
   const [roundEndScoreboard, setRoundEndScoreboard] = useState<RoundEndScoreboardState | null>(null);
   const [finalRankingBoard, setFinalRankingBoard] = useState<FinalRankingBoardState | null>(null);
   /** 라운드 종료 시 STOMP `/ranking`·GET 시드로 갱신되는 누적 승수 랭킹 */
@@ -730,6 +741,8 @@ export default function RoomDetailPage() {
   } | null>(null);
   const myAiRoundSubmitByRoundIdRef = useRef<Map<number, { points: number; answer: string }>>(new Map());
   const lastSeenRoundIdForScoreRef = useRef<number | null>(null);
+  /** 내가 연속으로 보낸 낙관적 채팅 줄 id — STOMP 에코가 보낸 순서(FIFO)로 하나씩 제거·교체 */
+  const pendingOptimisticChatQueueRef = useRef<string[]>([]);
 
   const roundAdvanceSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const roundAdvanceCountdownIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -738,26 +751,37 @@ export default function RoomDetailPage() {
   /** 개발 모드 Strict Mode에서 effect가 두 번 돌며 join이 동시에 두 번 나가면 백엔드에서 500이 날 수 있음 — 최신 진입만 유효 */
   const roomEnterSeqRef = useRef(0);
   const [roundAdvanceCountdownSec, setRoundAdvanceCountdownSec] = useState<number | null>(null);
-  const stompChatClearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const clearStompChatLineAndTimer = useCallback(() => {
-    if (stompChatClearTimerRef.current) {
-      clearTimeout(stompChatClearTimerRef.current);
-      stompChatClearTimerRef.current = null;
-    }
-    setStompChatLine(null);
+  const clearRoomChatLog = useCallback(() => {
+    pendingOptimisticChatQueueRef.current = [];
+    setRoomChatMessages([]);
   }, []);
 
-  const showTransientStompChat = useCallback((line: string) => {
-    setStompChatLine(line);
-    if (stompChatClearTimerRef.current) {
-      clearTimeout(stompChatClearTimerRef.current);
-    }
-    stompChatClearTimerRef.current = setTimeout(() => {
-      stompChatClearTimerRef.current = null;
-      setStompChatLine(null);
-    }, 8000);
+  const appendRoomChatEntry = useCallback((entry: Omit<RoomChatLogEntry, 'id' | 'at'> & { id?: string }) => {
+    const id = entry.id ?? `chat-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    const at = Date.now();
+    const row: RoomChatLogEntry = {
+      id,
+      at,
+      kind: entry.kind,
+      sender: entry.sender,
+      message: entry.message,
+    };
+    setRoomChatMessages((prev) => {
+      const next = [...prev, row];
+      return next.length > MAX_ROOM_CHAT_MESSAGES ? next.slice(-MAX_ROOM_CHAT_MESSAGES) : next;
+    });
   }, []);
+
+  /** 방 URL이 바뀔 때만 로그 비움 — `roomIdNumber`가 NaN일 때와 구분 */
+  useEffect(() => {
+    startTransition(() => {
+      pendingOptimisticChatQueueRef.current = [];
+      setRoomChatMessages([]);
+    });
+  }, [roomId]);
+
+  const refreshRoomParticipantsRef = useRef<() => Promise<void>>(async () => {});
 
   const refreshRoomParticipants = useCallback(async () => {
     if (!roomIdNumber) return;
@@ -813,11 +837,10 @@ export default function RoomDetailPage() {
           );
           // 서버 반영 직후 current-round 조회가 잠깐 지연될 수 있어 한 번 더 동기화
           window.setTimeout(() => {
-            void refreshRoomParticipants();
+            void refreshRoomParticipantsRef.current();
           }, 220);
         }
       } else {
-        clearStompChatLineAndTimer();
         setRoundInfo(null);
         setSubmitInfo(null);
         clearPersistedRoundUi(roomIdNumber);
@@ -845,7 +868,11 @@ export default function RoomDetailPage() {
       }
       /* 그 외 STOMP 동기화 실패는 조용히 무시 */
     }
-  }, [roomIdNumber, clearStompChatLineAndTimer]);
+  }, [roomIdNumber, clearRoomChatLog]);
+
+  useEffect(() => {
+    refreshRoomParticipantsRef.current = refreshRoomParticipants;
+  }, [refreshRoomParticipants]);
 
   const scheduleRoundAdvanceSync = useCallback(() => {
     if (roundAdvanceSyncTimerRef.current) {
@@ -892,10 +919,6 @@ export default function RoomDetailPage() {
         roundAdvanceCountdownIntervalRef.current = null;
       }
       roundAdvanceEndsAtRef.current = null;
-      if (stompChatClearTimerRef.current) {
-        clearTimeout(stompChatClearTimerRef.current);
-        stompChatClearTimerRef.current = null;
-      }
       if (roundTimerIntervalRef.current) {
         clearInterval(roundTimerIntervalRef.current);
         roundTimerIntervalRef.current = null;
@@ -1020,17 +1043,40 @@ export default function RoomDetailPage() {
       }
       if (dest === 'chat') {
         const c = body as ChatMessageDtoWs;
-        if (c?.message) {
-          const sender = c.sender?.trim() || '';
-          const isNotice = c.type === 'NOTICE' || sender === 'System' || !sender;
-          if (!isNotice) {
-            setPlayers((prev) =>
-              prev.map((p) => (p.nickname === sender ? { ...p, bubble: c.message } : p)),
-            );
+        const raw = c?.message;
+        const msg = typeof raw === 'string' ? raw.trim() : '';
+        if (!msg) return;
+        const sender = (c.sender ?? '').trim();
+        const isNotice = c.type === 'NOTICE' || sender === 'System' || sender.length === 0;
+        if (isNotice) {
+          const label = sender === 'System' || sender.length === 0 ? '시스템' : '알림';
+          appendRoomChatEntry({ kind: 'NOTICE', sender: label, message: msg });
+        } else {
+          const senderNorm = (sender || '익명').trim();
+          const myUid = getJwtUserId(typeof window !== 'undefined' ? localStorage.getItem('accessToken') : null);
+          const me = myUid != null ? playersRef.current.find((p) => p.userId === myUid) : undefined;
+          const myNick = (me?.nickname ?? '').trim();
+          const q = pendingOptimisticChatQueueRef.current;
+          if (myNick && senderNorm === myNick && q.length > 0) {
+            const pendingId = q[0]!;
+            pendingOptimisticChatQueueRef.current = q.slice(1);
+            const at = Date.now();
+            const id = `chat-${at}-${Math.random().toString(36).slice(2, 10)}`;
+            const row: RoomChatLogEntry = {
+              id,
+              at,
+              kind: 'TALK',
+              sender: senderNorm,
+              message: msg,
+            };
+            setRoomChatMessages((prev) => {
+              const cut = prev.filter((r) => r.id !== pendingId);
+              const next = [...cut, row];
+              return next.length > MAX_ROOM_CHAT_MESSAGES ? next.slice(-MAX_ROOM_CHAT_MESSAGES) : next;
+            });
+          } else {
+            appendRoomChatEntry({ kind: 'TALK', sender: senderNorm, message: msg });
           }
-          showTransientStompChat(
-            `${c.sender === 'System' ? '알림' : (c.sender ?? '알림')}: ${c.message}`,
-          );
         }
         return;
       }
@@ -1091,7 +1137,11 @@ export default function RoomDetailPage() {
         // 현재 라운드 타임오버일 때만 자동 제출 신호를 올린다.
         if (!Number.isFinite(payloadRoundId) || !activeRoundId || payloadRoundId === activeRoundId) {
           setRoundRemainingSec(0);
-          showTransientStompChat('알림: 제한 시간이 종료되어 현재 그림을 자동 제출합니다.');
+          appendRoomChatEntry({
+            kind: 'NOTICE',
+            sender: '알림',
+            message: '제한 시간이 종료되어 현재 그림을 자동 제출합니다.',
+          });
           setTimeOverSignal((v) => v + 1);
         }
         return;
@@ -1104,7 +1154,6 @@ export default function RoomDetailPage() {
         clearPersistedRoundUi(roomIdNumber);
         setRoundInfo(rs);
         setSubmitInfo(null);
-        clearStompChatLineAndTimer();
         void refreshRoomParticipants();
         return;
       }
@@ -1123,8 +1172,7 @@ export default function RoomDetailPage() {
       roomIdNumber,
       roundInfo,
       scheduleRoundAdvanceSync,
-      showTransientStompChat,
-      clearStompChatLineAndTimer,
+      appendRoomChatEntry,
       roundInfo?.roundId,
     ],
   );
@@ -1168,7 +1216,6 @@ export default function RoomDetailPage() {
     roundAdvanceEndsAtRef.current = null;
     setRoundAdvanceCountdownSec(null);
     setFinalRankingBoard(null);
-    clearStompChatLineAndTimer();
 
     const isStale = () => cancelled || enterSeq !== roomEnterSeqRef.current;
 
@@ -1264,7 +1311,7 @@ export default function RoomDetailPage() {
         } else {
           if (isStale()) return;
 
-          clearStompChatLineAndTimer();
+          clearRoomChatLog();
           setRoundInfo(null);
           setSubmitInfo(null);
           clearPersistedRoundUi(roomIdNumber);
@@ -1294,7 +1341,7 @@ export default function RoomDetailPage() {
     return () => {
       cancelled = true;
     };
-  }, [roomIdNumber, clearStompChatLineAndTimer, refreshRoomParticipants]);
+  }, [roomIdNumber, clearRoomChatLog, refreshRoomParticipants]);
 
   const keyword = roundInfo?.keyword?.trim() ?? '';
   const roundLabel = useMemo(() => {
@@ -1433,21 +1480,21 @@ export default function RoomDetailPage() {
     setLeavingRoom(true);
     try {
       await apiFetch<null>(`/api/rooms/${roomIdNumber}/leave`, { method: 'DELETE' });
-      clearStompChatLineAndTimer();
+      clearRoomChatLog();
       router.replace('/rooms');
       return;
     } catch (e) {
       const st = getHttpStatus(e);
       if (isUnauthorizedStatus(st)) {
         clearAuthSession();
-        clearStompChatLineAndTimer();
+        clearRoomChatLog();
         // 토큰 만료 상태에서는 leave API도 계속 403이므로, 사용자를 화면에서 먼저 빠져나가게 한다.
         router.replace(`/login?redirect=${encodeURIComponent(`/rooms/${roomIdNumber}`)}`);
         return;
       }
       // 마지막 인원 퇴장 시 방 삭제 타이밍과 겹치면 404/409가 날 수 있다.
       if (st === 404 || st === 409) {
-        clearStompChatLineAndTimer();
+        clearRoomChatLog();
         router.replace('/rooms');
         return;
       }
@@ -1458,14 +1505,14 @@ export default function RoomDetailPage() {
           const myUserId = getJwtUserId(typeof window !== 'undefined' ? localStorage.getItem('accessToken') : null);
           const stillInRoom = myUserId != null && latest.participants.some((p) => p.userId === myUserId);
           if (!stillInRoom) {
-            clearStompChatLineAndTimer();
+            clearRoomChatLog();
             router.replace('/rooms');
             return;
           }
           // 백엔드에서 AI 포함/게임 진행 중 leave 처리 시 간헐적 500이 발생하는 케이스 완화:
           // 실제로는 방 화면 이탈이 우선이므로 로비로 먼저 이동시킨다.
           if (isRoomInProgress || hasAiPlayer) {
-            clearStompChatLineAndTimer();
+            clearRoomChatLog();
             router.replace('/rooms');
             return;
           }
@@ -1474,7 +1521,7 @@ export default function RoomDetailPage() {
         } catch (verifyErr) {
           const verifyStatus = getHttpStatus(verifyErr);
           if (verifyStatus === 404) {
-            clearStompChatLineAndTimer();
+            clearRoomChatLog();
             router.replace('/rooms');
             return;
           }
@@ -1489,7 +1536,6 @@ export default function RoomDetailPage() {
   async function handleStartGame() {
     if (!roomIdNumber) return;
     setError('');
-    clearStompChatLineAndTimer();
     setLoadingStart(true);
     try {
       clearPersistedRoundUi(roomIdNumber);
@@ -1605,8 +1651,14 @@ export default function RoomDetailPage() {
   function handleSendChat(message: string) {
     const trimmed = message.trim();
     if (!trimmed) return;
+    const myNick = myPlayer?.nickname?.trim() || '나';
+    const optimisticId = `opt-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    pendingOptimisticChatQueueRef.current = [...pendingOptimisticChatQueueRef.current, optimisticId];
+    appendRoomChatEntry({ kind: 'TALK', sender: myNick, message: trimmed, id: optimisticId });
     const ok = publishChat(trimmed);
     if (!ok) {
+      pendingOptimisticChatQueueRef.current = pendingOptimisticChatQueueRef.current.filter((id) => id !== optimisticId);
+      setRoomChatMessages((prev) => prev.filter((r) => r.id !== optimisticId));
       setError('채팅 서버 연결이 불안정합니다. 잠시 후 다시 시도해 주세요.');
     }
   }
@@ -1699,14 +1751,14 @@ export default function RoomDetailPage() {
             activeRoundId={roundInfo?.roundId ?? null}
             errorLine={gameErrorLine}
             instructionLine={instructionLine}
-            stompChatLine={stompChatLine}
+            chatMessages={roomChatMessages}
             chatConnected={chatConnected}
             onSendChat={handleSendChat}
             setError={setError}
             onSubmitDrawing={handleSubmitDrawing}
             loadingSubmit={loadingSubmit}
-          timeOverSignal={timeOverSignal}
-          myAlreadySubmitted={Boolean(myPlayer?.submitted)}
+            timeOverSignal={timeOverSignal}
+            myAlreadySubmitted={Boolean(myPlayer?.submitted)}
           />
           <PlayerColumn players={rightPlayers} />
         </section>
@@ -2196,8 +2248,6 @@ function PlayerCard({ player }: { player: Player }) {
           : 'border-white/10 bg-slate-900/70'
       }`}
     >
-      <PlayerChatBubble text={player.bubble} />
-
       <div className="flex flex-col items-center text-center">
         <div className="relative">
           <div
@@ -2274,7 +2324,7 @@ function GameBoard({
   activeRoundId,
   errorLine,
   instructionLine,
-  stompChatLine,
+  chatMessages = [],
   chatConnected,
   onSendChat,
   setError,
@@ -2288,7 +2338,7 @@ function GameBoard({
   activeRoundId: number | null;
   errorLine: string | null;
   instructionLine: string;
-  stompChatLine: string | null;
+  chatMessages?: RoomChatLogEntry[];
   chatConnected: boolean;
   onSendChat: (message: string) => void;
   setError: (msg: string) => void;
@@ -2302,6 +2352,7 @@ function GameBoard({
   const [strokeColor, setStrokeColor] = useState<string>(PALETTE[0].color);
   const [lineWidth, setLineWidth] = useState(8);
   const [chatInput, setChatInput] = useState('');
+  const chatScrollRef = useRef<HTMLDivElement>(null);
   const [submitConfirmOpen, setSubmitConfirmOpen] = useState(false);
   const submitConfirmLockRef = useRef(false);
   const lastTimeOverSignalRef = useRef(0);
@@ -2313,6 +2364,12 @@ function GameBoard({
   useEffect(() => {
     canvasRef.current?.clear();
   }, [activeRoundId]);
+
+  useEffect(() => {
+    const node = chatScrollRef.current;
+    if (!node) return;
+    node.scrollTop = node.scrollHeight;
+  }, [chatMessages]);
 
   useEffect(() => {
     if (timeOverSignal <= 0) return;
@@ -2380,13 +2437,14 @@ function GameBoard({
     }
     submitConfirmLockRef.current = true;
     setError('');
+    // 확인 후에는 모달을 닫고, 버튼 인라인 로딩만 노출한다.
+    setSubmitConfirmOpen(false);
     try {
       await onSubmitDrawing(api.toDataUrl());
     } catch {
       // 오류 문구는 상위에서 setError 처리
     } finally {
       submitConfirmLockRef.current = false;
-      setSubmitConfirmOpen(false);
     }
   }
 
@@ -2400,16 +2458,6 @@ function GameBoard({
   return (
     <section className="rounded-2xl border border-white/10 bg-white/[0.04] p-4 shadow-2xl backdrop-blur sm:rounded-[2rem] sm:p-5">
       <div className="relative flex flex-col gap-2.5 overflow-hidden rounded-xl border border-white/10 bg-slate-900/70 p-4 sm:gap-3 sm:rounded-[1.5rem] sm:p-5">
-        {loadingSubmit && !submitConfirmOpen ? (
-          <div
-            className="absolute inset-0 z-[35] flex flex-col items-center justify-center gap-3 rounded-[inherit] bg-slate-950/65 px-6 backdrop-blur-sm"
-            role="status"
-            aria-live="assertive"
-            aria-busy="true"
-          >
-            <SubmitInProgressPanel />
-          </div>
-        ) : null}
         <div className="flex flex-col gap-2 sm:gap-3">
           {keyword ? (
             <div className="flex min-h-[4.5rem] items-start justify-center sm:min-h-[5rem]">
@@ -2427,9 +2475,6 @@ function GameBoard({
               <div className="max-w-[min(100%,32rem)] rounded-2xl border border-rose-400/35 bg-rose-500/10 px-4 py-3 text-center sm:px-5 sm:py-3.5">
                 <p className="text-sm font-semibold leading-relaxed text-rose-100">{errorLine}</p>
               </div>
-            ) : null}
-            {stompChatLine ? (
-              <p className="max-w-[520px] text-center text-xs leading-relaxed text-slate-400">{stompChatLine}</p>
             ) : null}
             <p className="max-w-[520px] text-center text-sm leading-relaxed text-slate-300">{instructionLine}</p>
             <div className="flex flex-wrap items-center justify-center gap-2 sm:gap-3">
@@ -2471,32 +2516,110 @@ function GameBoard({
           loadingSubmit={loadingSubmit}
           interactionLocked={loadingSubmit}
         />
-        <div className="flex items-center gap-2 rounded-2xl border border-white/10 bg-slate-950/60 p-3">
-          <span className={`text-xs font-semibold ${chatConnected ? 'text-emerald-300' : 'text-slate-400'}`}>
-            {chatConnected ? '채팅 연결됨' : '채팅 연결 중...'}
-          </span>
-          <input
-            value={chatInput}
-            onChange={(e) => setChatInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                e.preventDefault();
-                handleSendChatClick();
-              }
-            }}
-            maxLength={200}
-            placeholder="메시지를 보내면 프로필 옆 말풍선으로 잠깐 표시됩니다"
-            className="min-w-0 flex-1 rounded-lg border border-white/10 bg-slate-900/70 px-3 py-2 text-sm text-white outline-none placeholder:text-slate-500"
-          />
-          <button
-            type="button"
-            onClick={handleSendChatClick}
-            disabled={!chatConnected || !chatInput.trim()}
-            className="rounded-lg bg-gradient-to-r from-blue-500 to-violet-500 px-4 py-2 text-sm font-bold text-white disabled:opacity-60"
-          >
-            전송
-          </button>
-        </div>
+        {typeof window !== 'undefined'
+          ? createPortal(
+              <div
+                className="pointer-events-none"
+                style={{
+                  position: 'fixed',
+                  left: '16px',
+                  bottom: '16px',
+                  zIndex: 45,
+                  width: 'min(560px, calc(100vw - 32px))',
+                  maxWidth: 'calc(100vw - 32px)',
+                }}
+              >
+                <div
+                  className="pointer-events-auto"
+                  style={{
+                    height: '312px',
+                    display: 'grid',
+                    gridTemplateRows: '1fr auto',
+                    rowGap: '8px',
+                    overflow: 'hidden',
+                  }}
+                >
+                  <div
+                    className="rounded-xl border bg-slate-950/40"
+                    style={{
+                      minHeight: 0,
+                      overflow: 'hidden',
+                      borderColor: 'rgba(51, 65, 85, 0.56)',
+                    }}
+                    aria-label="방 채팅 로그"
+                  >
+                    <div
+                      ref={chatScrollRef}
+                      className="h-full space-y-1.5 px-3 py-2 text-left text-sm"
+                      style={{ overflowY: 'auto' }}
+                    >
+                      {chatMessages.length === 0 ? (
+                        <p className="py-4 text-center text-xs text-slate-500">아직 메시지가 없습니다.</p>
+                      ) : (
+                        chatMessages.map((row) => {
+                          const timeStr = new Date(row.at).toLocaleTimeString('ko-KR', {
+                            hour: '2-digit',
+                            minute: '2-digit',
+                            second: '2-digit',
+                          });
+                          const moderated =
+                            row.kind === 'TALK' &&
+                            (row.message.includes('[AI 검열') ||
+                              row.message.includes('[부적절') ||
+                              row.message === '****');
+                          if (row.kind === 'NOTICE') {
+                            return (
+                              <div key={row.id} className="rounded-lg bg-slate-800/60 px-2 py-1.5 text-xs leading-relaxed">
+                                <span className="font-mono text-[10px] text-slate-500">{timeStr}</span>{' '}
+                                <span className="font-bold text-amber-200/90">{row.sender}</span>{' '}
+                                <span className="text-slate-300">{row.message}</span>
+                              </div>
+                            );
+                          }
+                          return (
+                            <div key={row.id} className="rounded-lg px-2 py-1 leading-snug hover:bg-white/[0.04]">
+                              <span className="font-mono text-[10px] text-slate-500">{timeStr}</span>{' '}
+                              <span className="font-bold text-violet-200">{row.sender}</span>
+                              <span className="text-slate-400">: </span>
+                              <span className={moderated ? 'text-amber-100/95' : 'text-slate-100'}>{row.message}</span>
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+                  </div>
+                  <div className="shrink-0 flex items-center gap-2 rounded-xl bg-slate-950/60 p-2.5">
+                    <span className={`text-xs font-semibold ${chatConnected ? 'text-emerald-300' : 'text-slate-400'}`}>
+                      {chatConnected ? '채팅 연결됨' : '채팅 연결 중...'}
+                    </span>
+                    <input
+                      value={chatInput}
+                      onChange={(e) => setChatInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          handleSendChatClick();
+                        }
+                      }}
+                      maxLength={200}
+                      placeholder="메시지를 입력한 뒤 전송하면 위 로그에 표시됩니다"
+                      className="min-w-0 flex-1 rounded-lg border bg-slate-900/70 px-3 py-2 text-sm text-white outline-none placeholder:text-slate-500"
+                      style={{ borderColor: 'rgba(51, 65, 85, 0.62)' }}
+                    />
+                    <button
+                      type="button"
+                      onClick={handleSendChatClick}
+                      disabled={!chatConnected || !chatInput.trim()}
+                      className="rounded-lg bg-gradient-to-r from-blue-500 to-violet-500 px-4 py-2 text-sm font-bold text-white disabled:opacity-60"
+                    >
+                      전송
+                    </button>
+                  </div>
+                </div>
+              </div>,
+              document.body,
+            )
+          : null}
       </div>
       {submitConfirmOpen ? (
         <ConfirmModal
@@ -2790,22 +2913,6 @@ function SpinnerRing({ className }: { className?: string }) {
       className={`inline-block shrink-0 animate-spin rounded-full border-[3px] border-white/25 border-t-cyan-200 ${className ?? 'h-8 w-8'}`}
       aria-hidden
     />
-  );
-}
-
-function SubmitInProgressPanel({
-  subtitle = '완료될 때까지 창을 닫지 마세요.',
-}: {
-  subtitle?: string;
-}) {
-  return (
-    <div className="flex max-w-[min(100%,22rem)] flex-col items-center gap-3 rounded-2xl border border-cyan-400/35 bg-slate-900/95 px-7 py-7 text-center shadow-2xl shadow-cyan-500/20 ring-1 ring-cyan-400/25">
-      <SpinnerRing className="h-11 w-11 border-[4px]" />
-      <p className="text-[15px] font-black leading-snug tracking-tight text-white sm:text-lg">
-        그림을 서버로 보내는 중이에요
-      </p>
-      <p className="text-xs font-medium leading-relaxed text-slate-400 sm:text-sm">{subtitle}</p>
-    </div>
   );
 }
 
