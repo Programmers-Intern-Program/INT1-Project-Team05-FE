@@ -192,6 +192,14 @@ function normalizeRoundSubmissionItem(raw: unknown): RoundSubmissionItem | null 
   };
 }
 
+/** 제출·라운드 종료 API의 score는 보통 0~1 유사도 — 화면에는 100점 만점으로 맞춘 정수 */
+function submissionScoreToDisplayPoints(score: number): number {
+  const s = Number(score);
+  if (!Number.isFinite(s)) return 0;
+  if (s >= 0 && s <= 1) return Math.round(s * 100);
+  return Math.round(s);
+}
+
 /** GET /api/rooms/{roomId}/ranking */
 type FinalRankingRow = {
   userId: number;
@@ -591,6 +599,8 @@ export default function RoomDetailPage() {
   const [stompChatLine, setStompChatLine] = useState<string | null>(null);
   const [roundEndScoreboard, setRoundEndScoreboard] = useState<RoundEndScoreboardState | null>(null);
   const [finalRankingBoard, setFinalRankingBoard] = useState<FinalRankingBoardState | null>(null);
+  /** 라운드 종료 시 STOMP `/ranking`·GET 시드로 갱신되는 누적 승수 랭킹 */
+  const [liveRankingRows, setLiveRankingRows] = useState<FinalRankingRow[]>([]);
 
   const roundAdvanceSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const roundAdvanceCountdownIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -867,6 +877,12 @@ export default function RoomDetailPage() {
 
   const onStompPayload = useCallback(
     (dest: RoomStompDestination, body: unknown) => {
+      if (dest === 'ranking') {
+        const list = Array.isArray(body) ? body : [];
+        const rows = list.map(normalizeRankingRow).filter((x): x is FinalRankingRow => x != null);
+        setLiveRankingRows(rows);
+        return;
+      }
       if (dest === 'chat') {
         const c = body as ChatMessageDtoWs;
         if (c?.message) {
@@ -1154,7 +1170,36 @@ export default function RoomDetailPage() {
   const isMyHost = Boolean(myPlayer?.isHost);
   const hasAiPlayer = players.some((p) => p.isAi);
   const canAddAi = roomCapacity ? roomCapacity.curPlayers < roomCapacity.maxPlayers : true;
+  const aiParticipantIdSet = useMemo(
+    () => new Set(players.filter((p) => p.isAi).map((p) => p.id)),
+    [players],
+  );
   const isRoomInProgress = roundInfo?.status === 'IN_PROGRESS' && !submitInfo?.gameFinished;
+
+  useEffect(() => {
+    if (!isRoomInProgress) setLiveRankingRows([]);
+  }, [isRoomInProgress]);
+
+  useEffect(() => {
+    if (!roomIdNumber || !isRoomInProgress) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const list = await apiFetch<unknown[]>(`/api/rooms/${roomIdNumber}/ranking`, { method: 'GET' });
+        if (cancelled) return;
+        const rows = (Array.isArray(list) ? list : [])
+          .map(normalizeRankingRow)
+          .filter((x): x is FinalRankingRow => x != null);
+        setLiveRankingRows(rows);
+      } catch {
+        if (!cancelled) setLiveRankingRows([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [roomIdNumber, isRoomInProgress, roundInfo?.roundId]);
+
   const roundTimerLabel =
     roundRemainingSec != null
       ? `${Math.floor(roundRemainingSec / 60)}:${String(roundRemainingSec % 60).padStart(2, '0')}`
@@ -1164,7 +1209,8 @@ export default function RoomDetailPage() {
   const feedbackLine = useMemo(() => {
     if (error) return error;
     if (submitInfo?.submittedAiAnswer) {
-      return `AI 판별: ${submitInfo.submittedAiAnswer} (${submitInfo.submittedScore.toFixed(2)})`;
+      const pts = submissionScoreToDisplayPoints(submitInfo.submittedScore);
+      return `AI 판별: ${submitInfo.submittedAiAnswer} — 이번 라운드 ${pts}점 (유사도 ${submitInfo.submittedScore.toFixed(2)})`;
     }
     return null;
   }, [error, submitInfo]);
@@ -1363,6 +1409,7 @@ export default function RoomDetailPage() {
           totalRounds={roomCapacity?.totalRounds ?? undefined}
           board={roundEndScoreboard}
           advanceCountdownSec={roundAdvanceCountdownSec}
+          aiParticipantIds={aiParticipantIdSet}
           winnerFallbackNickname={
             players.find((p) => p.id === submitInfo?.roundWinnerParticipantId)?.nickname ?? null
           }
@@ -1390,6 +1437,9 @@ export default function RoomDetailPage() {
       ) : null}
       {finalRankingBoard ? (
         <FinalRankingOverlay board={finalRankingBoard} onClose={() => setFinalRankingBoard(null)} />
+      ) : null}
+      {isRoomInProgress && !roundEndScoreboard ? (
+        <LiveRankingSystemPanel rows={liveRankingRows} stompConnected={chatConnected} />
       ) : null}
       <div className="pointer-events-none absolute left-1/2 top-[-220px] h-[420px] w-[420px] -translate-x-1/2 rounded-full bg-blue-500/10 blur-3xl" />
       <div className="pointer-events-none absolute right-[-120px] top-[260px] h-[280px] w-[280px] rounded-full bg-violet-500/10 blur-3xl" />
@@ -1459,6 +1509,7 @@ function RoundEndScoreboardOverlay({
   totalRounds,
   board,
   advanceCountdownSec,
+  aiParticipantIds,
   winnerFallbackNickname,
   onClose,
 }: {
@@ -1467,6 +1518,8 @@ function RoundEndScoreboardOverlay({
   totalRounds?: number | null;
   board: RoundEndScoreboardState;
   advanceCountdownSec: number | null;
+  /** 라운드 제출 카드에서 AI 참가자 표시용(participantId) */
+  aiParticipantIds: ReadonlySet<number>;
   winnerFallbackNickname: string | null;
   onClose: (opts: { gameFinished: boolean; openFinalRanking: boolean }) => void;
 }) {
@@ -1567,6 +1620,7 @@ function RoundEndScoreboardOverlay({
                 {board.items.map((item) => (
                   (() => {
                     const imageSrc = resolveSubmissionImageSrc(item.imageData);
+                    const displayPts = submissionScoreToDisplayPoints(item.score);
                     return (
                   <div
                     key={item.participantId}
@@ -1575,12 +1629,22 @@ function RoundEndScoreboardOverlay({
                         ? 'border-amber-400/50 ring-2 ring-amber-400/25'
                         : 'border-white/10'
                     }`}
+                    aria-label={`${item.nickname}, ${displayPts}점`}
                   >
-                    <div className="flex items-center justify-between border-b border-white/10 px-3 py-2 sm:px-4">
-                      <span className="font-bold text-white">{item.nickname}</span>
-                      <span className="rounded-full bg-white/10 px-2.5 py-0.5 text-xs font-black text-cyan-200">
-                        {(item.score * 100).toFixed(0)}점
-                      </span>
+                    <div className="flex items-center justify-between gap-2 border-b border-white/10 px-3 py-2.5 sm:px-4 sm:py-3">
+                      <div className="flex min-w-0 flex-1 items-center gap-2">
+                        <span className="truncate text-base font-bold text-white sm:text-lg">{item.nickname}</span>
+                        {aiParticipantIds.has(item.participantId) ? (
+                          <span className="shrink-0 rounded-full border border-violet-400/45 bg-violet-500/20 px-2 py-0.5 text-[10px] font-black uppercase tracking-wide text-violet-100">
+                            AI
+                          </span>
+                        ) : null}
+                      </div>
+                      {item.winner ? (
+                        <span className="shrink-0 rounded-full border border-amber-400/50 bg-amber-500/20 px-2.5 py-1 text-[10px] font-black uppercase tracking-wider text-amber-200">
+                          우승
+                        </span>
+                      ) : null}
                     </div>
                     <div className="relative aspect-square w-full bg-white">
                       {imageSrc ? (
@@ -1592,15 +1656,36 @@ function RoundEndScoreboardOverlay({
                       ) : (
                         <div className="flex h-full items-center justify-center text-sm text-slate-500">이미지 없음</div>
                       )}
+                      <div
+                        className={`pointer-events-none absolute bottom-2 right-2 rounded-xl border px-2.5 py-1.5 shadow-lg backdrop-blur-sm sm:bottom-3 sm:right-3 sm:px-3 sm:py-2 ${
+                          item.winner
+                            ? 'border-amber-400/40 bg-slate-950/88'
+                            : 'border-white/20 bg-slate-950/88'
+                        }`}
+                      >
+                        <p className="text-[9px] font-bold uppercase tracking-wider text-slate-400">점수</p>
+                        <p
+                          className={`text-lg font-black tabular-nums sm:text-xl ${
+                            item.winner ? 'text-amber-200' : 'text-cyan-200'
+                          }`}
+                        >
+                          {displayPts}점
+                        </p>
+                        {item.score >= 0 && item.score <= 1 ? (
+                          <p className="mt-0.5 text-[10px] font-semibold tabular-nums text-slate-400">
+                            유사도 {item.score.toFixed(2)}
+                          </p>
+                        ) : null}
+                      </div>
                     </div>
-                    <p className="px-3 py-2 text-xs leading-relaxed text-slate-400 sm:px-4">
-                      AI: <span className="font-semibold text-slate-200">{item.aiAnswer}</span>
-                    </p>
-                    {item.winner ? (
-                      <p className="px-3 pb-3 text-center text-xs font-black uppercase tracking-wider text-amber-300 sm:px-4">
-                        ROUND WINNER
+                    <div className="border-t border-violet-400/30 bg-gradient-to-b from-violet-950/50 to-slate-950/80 px-3 py-3 sm:px-4 sm:py-4">
+                      <p className="text-[10px] font-black uppercase tracking-[0.18em] text-violet-200 sm:text-[11px]">
+                        AI 추론 제시어
                       </p>
-                    ) : null}
+                      <p className="mt-1.5 break-words text-base font-bold leading-snug text-white sm:text-lg">
+                        {item.aiAnswer.trim() || '—'}
+                      </p>
+                    </div>
                   </div>
                     );
                   })()
@@ -1809,6 +1894,64 @@ function FinalRankingOverlay({
         </div>
       </div>
     </div>
+  );
+}
+
+const LIVE_RANKING_PANEL_MAX = 6;
+
+function LiveRankingSystemPanel({
+  rows,
+  stompConnected,
+}: {
+  rows: FinalRankingRow[];
+  stompConnected: boolean;
+}) {
+  const preview = rows.slice(0, LIVE_RANKING_PANEL_MAX);
+  return (
+    <aside
+      className="pointer-events-none fixed right-3 top-[4.5rem] z-[65] w-[260px] max-w-[calc(100vw-1.5rem)] select-none sm:right-5 sm:top-24"
+      aria-label="실시간 라운드 랭킹"
+    >
+      <div className="pointer-events-auto rounded-2xl border border-amber-400/25 bg-slate-950/90 p-3 shadow-xl backdrop-blur-md">
+        <div className="flex items-start justify-between gap-2 border-b border-white/10 pb-2">
+          <div>
+            <p className="text-[10px] font-black uppercase tracking-[0.2em] text-amber-200/90">라운드별</p>
+            <h2 className="text-sm font-black text-white">랭킹 시스템</h2>
+          </div>
+          <span
+            className={`mt-0.5 shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold ${
+              stompConnected ? 'bg-emerald-500/15 text-emerald-200' : 'bg-slate-600/40 text-slate-400'
+            }`}
+            title={stompConnected ? '실시간 랭킹 채널 연결됨' : '연결 대기 중'}
+          >
+            {stompConnected ? 'LIVE' : '…'}
+          </span>
+        </div>
+        <ol className="mt-2 max-h-[min(40vh,320px)] space-y-1.5 overflow-y-auto pr-0.5">
+          {preview.length === 0 ? (
+            <li className="rounded-xl bg-white/[0.03] px-3 py-4 text-center text-xs text-slate-500">
+              순위 데이터를 불러오는 중입니다.
+            </li>
+          ) : (
+            preview.map((row, i) => (
+              <li
+                key={row.userId}
+                className="flex items-center justify-between gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-2.5 py-1.5 text-sm"
+              >
+                <span className="flex min-w-0 flex-1 items-center gap-2">
+                  <span className="w-5 shrink-0 text-center text-xs font-black text-amber-200/90">{i + 1}</span>
+                  <span className="truncate font-semibold text-slate-100">{row.nickname}</span>
+                </span>
+                <span className="shrink-0 text-xs font-bold tabular-nums text-cyan-200">{row.roundWinCount}승</span>
+              </li>
+            ))
+          )}
+        </ol>
+        {rows.length > LIVE_RANKING_PANEL_MAX ? (
+          <p className="mt-1.5 text-center text-[10px] text-slate-500">외 {rows.length - LIVE_RANKING_PANEL_MAX}명</p>
+        ) : null}
+      </div>
+    </aside>
   );
 }
 
@@ -2165,9 +2308,10 @@ function GameBoard({
 
           <div className="flex w-full flex-col items-center gap-2 sm:gap-3">
             {feedbackLine ? (
-              <p className="max-w-[520px] text-center text-sm font-semibold leading-relaxed text-amber-200/95">
-                {feedbackLine}
-              </p>
+              <div className="max-w-[min(100%,32rem)] rounded-2xl border border-amber-400/35 bg-amber-500/10 px-4 py-3 text-center shadow-inner sm:px-5 sm:py-3.5">
+                <p className="text-[10px] font-black uppercase tracking-[0.2em] text-amber-200/90">AI 채점</p>
+                <p className="mt-1.5 text-sm font-bold leading-relaxed text-amber-50 sm:text-base">{feedbackLine}</p>
+              </div>
             ) : null}
             {stompChatLine ? (
               <p className="max-w-[520px] text-center text-xs leading-relaxed text-slate-400">{stompChatLine}</p>

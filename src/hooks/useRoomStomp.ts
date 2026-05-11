@@ -4,7 +4,7 @@ import { Client, type IMessage } from '@stomp/stompjs';
 import SockJS from 'sockjs-client';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-export type RoomStompDestination = 'room' | 'chat';
+export type RoomStompDestination = 'room' | 'chat' | 'ranking';
 
 function sockJsUrl(): string {
   const base = (process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:8080').replace(/\/$/, '');
@@ -12,7 +12,7 @@ function sockJsUrl(): string {
 }
 
 /**
- * 방 단위 STOMP 구독 (`/sub/rooms/{roomId}`, `/sub/rooms/{roomId}/chat`).
+ * 방 단위 STOMP 구독 (`/sub/rooms/{roomId}`, `/sub/rooms/{roomId}/chat`, `/sub/rooms/{roomId}/ranking`).
  * CONNECT 시 `Authorization: Bearer …` (백엔드 StompHandler와 동일).
  */
 export function useRoomStomp(
@@ -56,6 +56,15 @@ export function useRoomStomp(
             /* 그대로 */
           }
           onPayloadRef.current('chat', body);
+        });
+        client.subscribe(`/sub/rooms/${roomId}/ranking`, (message: IMessage) => {
+          let body: unknown = message.body;
+          try {
+            body = JSON.parse(message.body);
+          } catch {
+            /* 그대로 */
+          }
+          onPayloadRef.current('ranking', body);
         });
       },
       onStompError: (frame) => {
