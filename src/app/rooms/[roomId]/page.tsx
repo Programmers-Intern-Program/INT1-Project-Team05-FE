@@ -5,6 +5,7 @@ import { useParams, useRouter } from 'next/navigation';
 import type { DrawingCanvasHandle } from '@/components/DrawingCanvas';
 import { DrawingCanvas } from '@/components/DrawingCanvas';
 import PlayerChatBubble from '@/components/PlayerChatBubble';
+import { ProfileImage } from '@/components/ProfileImage';
 import { useRoomStomp, type RoomStompDestination } from '@/hooks/useRoomStomp';
 import { apiFetch, getHttpStatus } from '@/lib/api-client';
 import { clearAuthSession, isUnauthorizedStatus } from '@/lib/auth-session';
@@ -20,6 +21,8 @@ type Player = {
   submitted: boolean;
   roundWinCount: number;
   bubble?: string;
+  /** `GET /api/user/{userId}` 로 채움 — 마이페이지에서 프로필 사진 변경 후에도 탭 복귀 시 갱신 */
+  profileImageUrl?: string | null;
 };
 
 type CurrentRoundParticipant = {
@@ -347,6 +350,22 @@ function participantDtoIsAi(p: RoomDetailParticipant): boolean {
   return Boolean(p.isAi ?? p.ai);
 }
 
+function nicknameKeyForMatch(s: string): string {
+  return s.trim().toLowerCase();
+}
+
+/** 제출 API 닉네임(정확)과 방 상세의 isAi 플래그로 AI 여부 판별 — participantId 정렬 불일치 회피 */
+function submissionNicknameIsAiInRoom(
+  submissionNickname: string,
+  roomParticipants: RoomDetailParticipant[],
+): boolean {
+  if (roomParticipants.length === 0) return false;
+  const key = nicknameKeyForMatch(submissionNickname);
+  return roomParticipants.some(
+    (p) => participantDtoIsAi(p) && nicknameKeyForMatch(p.nickname) === key,
+  );
+}
+
 function normalizeWsSubmitDrawing(o: Record<string, unknown>): SubmitDrawingData {
   return {
     roundId: Number(o.roundId),
@@ -460,62 +479,107 @@ function normalizeCurrentRoundData(raw: CurrentRoundDataJson): CurrentRoundData 
   };
 }
 
-/** 라운드 API(participantId)와 방 상세(userId·nickname)를 맞춰 표시용 닉네임을 붙입니다. */
+/**
+ * 라운드 API(participantId)와 방 상세를 맞춘다.
+ * 이전 `players`의 participantId→닉네임 힌트로 방 참가자와 1:1 매칭해, 인덱스 정렬(userId vs participantId) 불일치로
+ * isAi가 엇갈리던 문제를 피한다.
+ */
 function buildPlayersFromRoundAndRoom(
   roundParticipants: CurrentRoundParticipantJson[],
   roomParticipants: RoomDetailParticipant[],
+  nicknameByParticipantIdHint?: ReadonlyMap<number, string>,
 ): Player[] {
   const roundNorm = roundParticipants.map(normalizeRoundParticipant);
-  const hostsRoom = roomParticipants.filter((p) => p.isHost).sort((a, b) => a.userId - b.userId);
-  const guestsRoom = roomParticipants.filter((p) => !p.isHost).sort((a, b) => a.userId - b.userId);
-  const hostsRound = roundNorm.filter((p) => p.isHost).sort((a, b) => a.participantId - b.participantId);
-  const guestsRound = roundNorm.filter((p) => !p.isHost).sort((a, b) => a.participantId - b.participantId);
+  const usedUserIds = new Set<number>();
+  const roomByParticipantId = new Map<number, RoomDetailParticipant | undefined>();
 
-  const nicknameByParticipantId = new Map<number, string>();
-  const userIdByParticipantId = new Map<number, number>();
-  const isAiByParticipantId = new Map<number, boolean>();
-  hostsRound.forEach((rp, i) => {
-    const rm = hostsRoom[i];
-    if (rm) {
-      nicknameByParticipantId.set(rp.participantId, rm.nickname);
-      userIdByParticipantId.set(rp.participantId, rm.userId);
-      isAiByParticipantId.set(rp.participantId, participantDtoIsAi(rm));
-    }
-  });
-  guestsRound.forEach((rp, i) => {
-    const rm = guestsRoom[i];
-    if (rm) {
-      nicknameByParticipantId.set(rp.participantId, rm.nickname);
-      userIdByParticipantId.set(rp.participantId, rm.userId);
-      isAiByParticipantId.set(rp.participantId, participantDtoIsAi(rm));
-    }
+  const sortedForAssign = [...roundNorm].sort((a, b) => {
+    if (a.isHost !== b.isHost) return a.isHost ? -1 : 1;
+    return a.participantId - b.participantId;
   });
 
-  return roundNorm.map((rp) => ({
-    id: rp.participantId,
-    userId: userIdByParticipantId.get(rp.participantId),
-    nickname:
-      nicknameByParticipantId.get(rp.participantId) ??
-      (rp.isHost ? '호스트' : `참가자 ${rp.participantId}`),
-    isHost: rp.isHost,
-    isAi: Boolean(isAiByParticipantId.get(rp.participantId)),
-    submitted: rp.submitted,
-    roundWinCount: rp.roundWinCount,
-  }));
+  for (const rp of sortedForAssign) {
+    const pool = roomParticipants.filter((rm) => rm.isHost === rp.isHost);
+    const hint = nicknameByParticipantIdHint?.get(rp.participantId);
+    let rm: RoomDetailParticipant | undefined;
+    if (hint) {
+      const hk = nicknameKeyForMatch(hint);
+      rm = pool.find(
+        (c) => !usedUserIds.has(c.userId) && nicknameKeyForMatch(c.nickname) === hk,
+      );
+    }
+    if (!rm) {
+      const rest = pool.filter((c) => !usedUserIds.has(c.userId)).sort((a, b) => a.userId - b.userId);
+      rm = rest[0];
+    }
+    if (rm) usedUserIds.add(rm.userId);
+    roomByParticipantId.set(rp.participantId, rm);
+  }
+
+  return roundNorm.map((rp) => {
+    const rm = roomByParticipantId.get(rp.participantId);
+    if (!rm) {
+      return {
+        id: rp.participantId,
+        userId: undefined,
+        nickname: rp.isHost ? '호스트' : `참가자 ${rp.participantId}`,
+        isHost: rp.isHost,
+        isAi: false,
+        submitted: rp.submitted,
+        roundWinCount: rp.roundWinCount,
+      };
+    }
+    return {
+      id: rp.participantId,
+      userId: rm.userId,
+      nickname: rm.nickname,
+      isHost: rp.isHost,
+      isAi: participantDtoIsAi(rm),
+      submitted: rp.submitted,
+      roundWinCount: rp.roundWinCount,
+    };
+  });
+}
+
+/** 라운드 짝 맞춤용: `id`(participantId)·`userId`(로비 단계 id와 동일할 때) 모두 힌트 키로 사용 */
+function participantNicknameHintsFromPlayers(playersSnapshot: readonly Player[]): Map<number, string> {
+  const hints = new Map<number, string>();
+  for (const p of playersSnapshot) {
+    hints.set(p.id, p.nickname);
+    if (typeof p.userId === 'number' && Number.isFinite(p.userId)) {
+      hints.set(p.userId, p.nickname);
+    }
+  }
+  return hints;
 }
 
 /**
  * 말풍선·AI 표시 등만 이전 행을 이어 붙이고, 제출 여부는 mapped만 따른다.
  * (이전 라운드 submitted를 OR로 유지하면 새 라운드에서도 제출 완료로 고정되는 버그가 난다.)
+ *
+ * 로비에서는 `id === userId`, 라운드 진행 중에는 `id === participantId`라서
+ * 게임 시작 직후 `id`만으로는 이전 행을 못 찾는다. 같은 사람은 `userId`로도 매칭한다.
  */
 function mergePlayersKeepSubmitted(prev: Player[], mapped: Player[]): Player[] {
   const prevById = new Map(prev.map((p) => [p.id, p]));
-  return mapped.map((p) => ({
-    ...p,
-    submitted: Boolean(p.submitted),
-    bubble: prevById.get(p.id)?.bubble,
-    isAi: p.isAi ?? prevById.get(p.id)?.isAi ?? false,
-  }));
+  const prevByUserId = new Map<number, Player>();
+  for (const q of prev) {
+    if (typeof q.userId === 'number' && Number.isFinite(q.userId)) {
+      prevByUserId.set(q.userId, q);
+    }
+  }
+  return mapped.map((p) => {
+    const old =
+      prevById.get(p.id) ??
+      (typeof p.userId === 'number' && Number.isFinite(p.userId) ? prevByUserId.get(p.userId) : undefined);
+    return {
+      ...p,
+      submitted: Boolean(p.submitted),
+      bubble: old?.bubble,
+      isAi: p.isAi ?? old?.isAi ?? false,
+      profileImageUrl: old?.profileImageUrl ?? p.profileImageUrl,
+    };
+  });
 }
 
 function getJwtUserId(token: string | null): number | null {
@@ -576,6 +640,62 @@ export default function RoomDetailPage() {
   const roomIdNumber = Number(roomId);
 
   const [players, setPlayers] = useState<Player[]>([]);
+  const playersRef = useRef<Player[]>([]);
+  useEffect(() => {
+    playersRef.current = players;
+  }, [players]);
+
+  const playerUserIdsKey = useMemo(() => {
+    const ids = players
+      .filter((p) => !p.isAi)
+      .map((p) => p.userId)
+      .filter((x): x is number => typeof x === 'number' && Number.isFinite(x));
+    return [...new Set(ids)].sort((a, b) => a - b).join(',');
+  }, [players]);
+
+  const hydratePlayerProfileImages = useCallback(async () => {
+    const list = playersRef.current;
+    const ids = [
+      ...new Set(
+        list
+          .filter((p) => !p.isAi)
+          .map((p) => p.userId)
+          .filter((x): x is number => typeof x === 'number' && Number.isFinite(x)),
+      ),
+    ];
+    if (ids.length === 0) return;
+    const entries = await Promise.all(
+      ids.map(async (userId) => {
+        try {
+          const u = await apiFetch<{ profileImageUrl: string | null }>(`/api/user/${userId}`, { method: 'GET' });
+          return [userId, u.profileImageUrl ?? null] as const;
+        } catch {
+          return [userId, null] as const;
+        }
+      }),
+    );
+    const byUserId = new Map(entries);
+    setPlayers((prev) =>
+      prev.map((p) => {
+        if (p.isAi || typeof p.userId !== 'number') return p;
+        if (!byUserId.has(p.userId)) return p;
+        return { ...p, profileImageUrl: byUserId.get(p.userId)! };
+      }),
+    );
+  }, []);
+
+  useEffect(() => {
+    void hydratePlayerProfileImages();
+  }, [playerUserIdsKey, hydratePlayerProfileImages]);
+
+  useEffect(() => {
+    const onVis = () => {
+      if (document.visibilityState === 'visible') void hydratePlayerProfileImages();
+    };
+    document.addEventListener('visibilitychange', onVis);
+    return () => document.removeEventListener('visibilitychange', onVis);
+  }, [hydratePlayerProfileImages]);
+
   const leftPlayers = players.slice(0, 2);
   const rightPlayers = players.slice(2, 4);
 
@@ -601,6 +721,15 @@ export default function RoomDetailPage() {
   const [finalRankingBoard, setFinalRankingBoard] = useState<FinalRankingBoardState | null>(null);
   /** 라운드 종료 시 STOMP `/ranking`·GET 시드로 갱신되는 누적 승수 랭킹 */
   const [liveRankingRows, setLiveRankingRows] = useState<FinalRankingRow[]>([]);
+  /** 방 상세의 participants 스냅샷 — 라운드 결과 AI 뱃지는 제출 닉네임과 여기서만 매칭 */
+  const [lastRoomParticipants, setLastRoomParticipants] = useState<RoomDetailParticipant[]>([]);
+  /** 라운드가 넘어간 뒤 랭킹 패널 하단에 보일 직전 라운드 내 AI 추론·점수 */
+  const [myPreviousRoundAiPanel, setMyPreviousRoundAiPanel] = useState<{
+    answer: string;
+    points: number;
+  } | null>(null);
+  const myAiRoundSubmitByRoundIdRef = useRef<Map<number, { points: number; answer: string }>>(new Map());
+  const lastSeenRoundIdForScoreRef = useRef<number | null>(null);
 
   const roundAdvanceSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const roundAdvanceCountdownIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -634,13 +763,19 @@ export default function RoomDetailPage() {
     if (!roomIdNumber) return;
     try {
       const latest = await apiFetch<RoomDetailData>(`/api/rooms/${roomIdNumber}`);
+      setLastRoomParticipants(latest.participants);
       setRoomCapacity(roomCapacityFromDetail(latest));
       if (roomIsPlaying(latest)) {
         try {
           const dataRaw = await apiFetch<CurrentRoundDataJson>(`/api/rooms/${roomIdNumber}/rounds/current`);
           const data = normalizeCurrentRoundData(dataRaw);
           setRoundInfo(data);
-          const mappedPlayers = buildPlayersFromRoundAndRoom(dataRaw.participants, latest.participants);
+          const hints = participantNicknameHintsFromPlayers(playersRef.current);
+          const mappedPlayers = buildPlayersFromRoundAndRoom(
+            dataRaw.participants,
+            latest.participants,
+            hints,
+          );
           const finalized = finalizePlayersForRound(roomIdNumber, data.roundId, mappedPlayers);
           setPlayers((prev) => mergePlayersKeepSubmitted(prev, finalized));
           setSubmitInfo((prev) => {
@@ -1078,6 +1213,7 @@ export default function RoomDetailPage() {
 
         // 3) 최신 방 상세 — 게임 중이면 현재 라운드까지 불러와 HUD·제출 표시 복원
         const latest = await apiFetch<RoomDetailData>(`/api/rooms/${roomIdNumber}`);
+        setLastRoomParticipants(latest.participants);
         setRoomCapacity(roomCapacityFromDetail(latest));
         if (isStale()) return;
 
@@ -1088,16 +1224,22 @@ export default function RoomDetailPage() {
 
             const data = normalizeCurrentRoundData(dataRaw);
             setRoundInfo(data);
-            const mappedPlayers = buildPlayersFromRoundAndRoom(dataRaw.participants, latest.participants);
-            const finalized = finalizePlayersForRound(roomIdNumber, data.roundId, mappedPlayers);
-            setPlayers((prev) => mergePlayersKeepSubmitted(prev, finalized));
+            const hintsJoin = participantNicknameHintsFromPlayers(playersRef.current);
+            const mappedJoin = buildPlayersFromRoundAndRoom(
+              dataRaw.participants,
+              latest.participants,
+              hintsJoin,
+            );
+            const finalizedJoin = finalizePlayersForRound(roomIdNumber, data.roundId, mappedJoin);
+            setPlayers((prev) => mergePlayersKeepSubmitted(prev, finalizedJoin));
             const persisted = loadPersistedRoundUi(roomIdNumber);
             if (persisted?.roundId === data.roundId && persisted.submitInfo) {
               setSubmitInfo(persisted.submitInfo);
             }
             const myUid = getJwtUserId(localStorage.getItem('accessToken'));
-            const mine = myUid != null ? finalized.find((pl) => pl.userId === myUid) : undefined;
-            setParticipantId(String(mine?.id ?? finalized[0]?.id ?? ''));
+            const mine =
+              myUid != null ? finalizedJoin.find((pl) => pl.userId === myUid) : undefined;
+            setParticipantId(String(mine?.id ?? finalizedJoin[0]?.id ?? ''));
           } catch {
             if (isStale()) return;
 
@@ -1170,11 +1312,50 @@ export default function RoomDetailPage() {
   const isMyHost = Boolean(myPlayer?.isHost);
   const hasAiPlayer = players.some((p) => p.isAi);
   const canAddAi = roomCapacity ? roomCapacity.curPlayers < roomCapacity.maxPlayers : true;
-  const aiParticipantIdSet = useMemo(
-    () => new Set(players.filter((p) => p.isAi).map((p) => p.id)),
-    [players],
-  );
   const isRoomInProgress = roundInfo?.status === 'IN_PROGRESS' && !submitInfo?.gameFinished;
+
+  useEffect(() => {
+    if (!roundInfo || roundInfo.status !== 'IN_PROGRESS') return;
+    const rid = roundInfo.roundId;
+    if (!Number.isFinite(rid) || rid <= 0) return;
+    if (!submitInfo?.submittedAiAnswer) return;
+    if (submitInfo.roundId !== rid) return;
+    if (!myPlayer?.submitted) return;
+    const pts = submissionScoreToDisplayPoints(submitInfo.submittedScore);
+    const answer = String(submitInfo.submittedAiAnswer ?? '').trim();
+    myAiRoundSubmitByRoundIdRef.current.set(rid, { points: pts, answer });
+  }, [
+    roundInfo?.roundId,
+    roundInfo?.status,
+    submitInfo?.submittedAiAnswer,
+    submitInfo?.roundId,
+    submitInfo?.submittedScore,
+    myPlayer?.submitted,
+  ]);
+
+  useEffect(() => {
+    if (!isRoomInProgress) {
+      setMyPreviousRoundAiPanel(null);
+      myAiRoundSubmitByRoundIdRef.current.clear();
+      lastSeenRoundIdForScoreRef.current = null;
+      return;
+    }
+    if (!roundInfo?.roundId || roundInfo.status !== 'IN_PROGRESS') return;
+    const cur = roundInfo.roundId;
+    const prev = lastSeenRoundIdForScoreRef.current;
+    if (prev != null && prev !== cur) {
+      const row = myAiRoundSubmitByRoundIdRef.current.get(prev);
+      if (row && Number.isFinite(row.points)) {
+        setMyPreviousRoundAiPanel({
+          points: row.points,
+          answer: row.answer.trim() || '—',
+        });
+      } else {
+        setMyPreviousRoundAiPanel(null);
+      }
+    }
+    lastSeenRoundIdForScoreRef.current = cur;
+  }, [isRoomInProgress, roundInfo?.roundId, roundInfo?.status]);
 
   useEffect(() => {
     if (!isRoomInProgress) setLiveRankingRows([]);
@@ -1200,20 +1381,42 @@ export default function RoomDetailPage() {
     };
   }, [roomIdNumber, isRoomInProgress, roundInfo?.roundId]);
 
+  /** API/Redis에는 승점 있는 사람만 올 수 있어, 0승 인간 참가자는 players 로 보강해 전원 순위 표시 */
+  const liveRankingMergedRows = useMemo(() => {
+    const byUser = new Map<number, FinalRankingRow>();
+    for (const r of liveRankingRows) {
+      byUser.set(r.userId, { ...r });
+    }
+    for (const p of players) {
+      if (p.isAi || p.userId == null) continue;
+      if (!byUser.has(p.userId)) {
+        byUser.set(p.userId, {
+          userId: p.userId,
+          nickname: p.nickname,
+          roundWinCount: p.roundWinCount,
+          isWinner: false,
+        });
+      } else {
+        const cur = byUser.get(p.userId)!;
+        byUser.set(p.userId, {
+          ...cur,
+          nickname: p.nickname || cur.nickname,
+          roundWinCount: Math.max(cur.roundWinCount, p.roundWinCount),
+        });
+      }
+    }
+    return [...byUser.values()].sort((a, b) => {
+      if (b.roundWinCount !== a.roundWinCount) return b.roundWinCount - a.roundWinCount;
+      return a.nickname.localeCompare(b.nickname, 'ko');
+    });
+  }, [liveRankingRows, players]);
+
   const roundTimerLabel =
     roundRemainingSec != null
       ? `${Math.floor(roundRemainingSec / 60)}:${String(roundRemainingSec % 60).padStart(2, '0')}`
       : null;
 
-  /** 에러·AI 결과만 (버튼/초기화와 무관하게 유지) */
-  const feedbackLine = useMemo(() => {
-    if (error) return error;
-    if (submitInfo?.submittedAiAnswer) {
-      const pts = submissionScoreToDisplayPoints(submitInfo.submittedScore);
-      return `AI 판별: ${submitInfo.submittedAiAnswer} — 이번 라운드 ${pts}점 (유사도 ${submitInfo.submittedScore.toFixed(2)})`;
-    }
-    return null;
-  }, [error, submitInfo]);
+  const gameErrorLine = useMemo(() => (error ? error : null), [error]);
 
   /** 항상 보이는 안내 (진행 단계별 고정 문구) */
   const instructionLine = useMemo(() => {
@@ -1301,13 +1504,20 @@ export default function RoomDetailPage() {
       const cur = normalizeCurrentRoundData(curRaw);
       setRoundInfo(cur);
       const latestRoom = await apiFetch<RoomDetailData>(`/api/rooms/${roomIdNumber}`);
+      setLastRoomParticipants(latestRoom.participants);
       setRoomCapacity(roomCapacityFromDetail(latestRoom));
-      const mappedPlayers = buildPlayersFromRoundAndRoom(curRaw.participants, latestRoom.participants);
       setSubmitInfo(null);
-      const finalizedStart = finalizePlayersForRound(roomIdNumber, cur.roundId, mappedPlayers);
+      const hintsStart = participantNicknameHintsFromPlayers(playersRef.current);
+      const mappedStart = buildPlayersFromRoundAndRoom(
+        curRaw.participants,
+        latestRoom.participants,
+        hintsStart,
+      );
+      const finalizedStart = finalizePlayersForRound(roomIdNumber, cur.roundId, mappedStart);
       setPlayers((prev) => mergePlayersKeepSubmitted(prev, finalizedStart));
       const myUid = getJwtUserId(localStorage.getItem('accessToken'));
-      const mine = myUid != null ? finalizedStart.find((pl) => pl.userId === myUid) : undefined;
+      const mine =
+        myUid != null ? finalizedStart.find((pl) => pl.userId === myUid) : undefined;
       setParticipantId(String(mine?.id ?? finalizedStart[0]?.id ?? ''));
     } catch (e) {
       setError(e instanceof Error ? e.message : '게임 시작에 실패했습니다.');
@@ -1405,11 +1615,10 @@ export default function RoomDetailPage() {
     <main className="relative min-h-[calc(100vh-4rem)] overflow-hidden text-white">
       {roundEndScoreboard ? (
         <RoundEndScoreboardOverlay
-          roomId={roomIdNumber}
           totalRounds={roomCapacity?.totalRounds ?? undefined}
           board={roundEndScoreboard}
           advanceCountdownSec={roundAdvanceCountdownSec}
-          aiParticipantIds={aiParticipantIdSet}
+          roomParticipantsSnapshot={lastRoomParticipants}
           winnerFallbackNickname={
             players.find((p) => p.id === submitInfo?.roundWinnerParticipantId)?.nickname ?? null
           }
@@ -1439,7 +1648,11 @@ export default function RoomDetailPage() {
         <FinalRankingOverlay board={finalRankingBoard} onClose={() => setFinalRankingBoard(null)} />
       ) : null}
       {isRoomInProgress && !roundEndScoreboard ? (
-        <LiveRankingSystemPanel rows={liveRankingRows} stompConnected={chatConnected} />
+        <LiveRankingSystemPanel
+          rows={liveRankingMergedRows}
+          stompConnected={chatConnected}
+          previousRoundAi={myPreviousRoundAiPanel}
+        />
       ) : null}
       <div className="pointer-events-none absolute left-1/2 top-[-220px] h-[420px] w-[420px] -translate-x-1/2 rounded-full bg-blue-500/10 blur-3xl" />
       <div className="pointer-events-none absolute right-[-120px] top-[260px] h-[280px] w-[280px] rounded-full bg-violet-500/10 blur-3xl" />
@@ -1484,7 +1697,7 @@ export default function RoomDetailPage() {
           <GameBoard
             keyword={keyword}
             activeRoundId={roundInfo?.roundId ?? null}
-            feedbackLine={feedbackLine}
+            errorLine={gameErrorLine}
             instructionLine={instructionLine}
             stompChatLine={stompChatLine}
             chatConnected={chatConnected}
@@ -1502,81 +1715,34 @@ export default function RoomDetailPage() {
   );
 }
 
-const ROUND_END_RANKING_PREVIEW = 4;
-
 function RoundEndScoreboardOverlay({
-  roomId,
   totalRounds,
   board,
   advanceCountdownSec,
-  aiParticipantIds,
+  roomParticipantsSnapshot,
   winnerFallbackNickname,
   onClose,
 }: {
-  roomId: number;
   /** 방 설정 총 라운드(표시용). 없으면 생략 */
   totalRounds?: number | null;
   board: RoundEndScoreboardState;
   advanceCountdownSec: number | null;
-  /** 라운드 제출 카드에서 AI 참가자 표시용(participantId) */
-  aiParticipantIds: ReadonlySet<number>;
+  /** 방 상세 participants — 제출 닉네임과 isAi만으로 AI 뱃지 표시 */
+  roomParticipantsSnapshot: RoomDetailParticipant[];
   winnerFallbackNickname: string | null;
   onClose: (opts: { gameFinished: boolean; openFinalRanking: boolean }) => void;
 }) {
-  const [step, setStep] = useState<1 | 2>(1);
-  const [rankingRows, setRankingRows] = useState<FinalRankingRow[]>([]);
-  const [rankingLoading, setRankingLoading] = useState(false);
-  const [rankingError, setRankingError] = useState<string | undefined>();
-
   const winnerName =
     board.items.find((x) => x.winner)?.nickname ?? winnerFallbackNickname ?? '라운드 우승';
-
-  useEffect(() => {
-    setStep(1);
-    setRankingRows([]);
-    setRankingError(undefined);
-    setRankingLoading(false);
-  }, [board.closedRoundId]);
-
-  useEffect(() => {
-    if (step !== 2 || !Number.isFinite(roomId) || roomId <= 0) return;
-    let cancelled = false;
-    setRankingLoading(true);
-    setRankingError(undefined);
-    void (async () => {
-      try {
-        const list = await apiFetch<unknown[]>(`/api/rooms/${roomId}/ranking`, { method: 'GET' });
-        if (cancelled) return;
-        const rows = (Array.isArray(list) ? list : [])
-          .map(normalizeRankingRow)
-          .filter((x): x is FinalRankingRow => x != null);
-        setRankingRows(rows);
-      } catch (e) {
-        if (cancelled) return;
-        setRankingRows([]);
-        setRankingError(e instanceof Error ? e.message : '순위를 불러오지 못했습니다.');
-      } finally {
-        if (!cancelled) setRankingLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [step, roomId, board.closedRoundId]);
-
-  const previewRows = rankingRows.slice(0, ROUND_END_RANKING_PREVIEW);
-  const titleId = step === 1 ? 'round-scoreboard-title' : 'round-ranking-preview-title';
 
   return (
     <div
       className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-md"
       role="dialog"
       aria-modal="true"
-      aria-labelledby={titleId}
+      aria-labelledby="round-scoreboard-title"
     >
       <div className="max-h-[min(92vh,880px)] w-full max-w-4xl overflow-y-auto rounded-[1.75rem] border border-white/15 bg-slate-900/95 p-5 shadow-2xl sm:p-8">
-        {step === 1 ? (
-          <>
             <div className="mb-6 text-center">
               <p className="text-xs font-bold uppercase tracking-[0.2em] text-blue-300/90">라운드 결과</p>
               <h2 id="round-scoreboard-title" className="mt-2 text-2xl font-black text-white sm:text-3xl">
@@ -1595,7 +1761,8 @@ function RoundEndScoreboardOverlay({
               </p>
               {board.gameFinished ? (
                 <p className="mt-2 text-sm text-slate-400">
-                  게임이 종료되었습니다. 아래에서 누적 순위를 확인한 뒤 최종 화면으로 이동할 수 있습니다.
+                  게임이 종료되었습니다. 이 창을 닫으면 오른쪽 랭킹 패널에서 누적 순위를 다시 볼 수 있고, 전체
+                  표는 아래 버튼으로 열 수 있습니다.
                 </p>
               ) : null}
               {advanceCountdownSec != null && advanceCountdownSec > 0 ? (
@@ -1634,7 +1801,7 @@ function RoundEndScoreboardOverlay({
                     <div className="flex items-center justify-between gap-2 border-b border-white/10 px-3 py-2.5 sm:px-4 sm:py-3">
                       <div className="flex min-w-0 flex-1 items-center gap-2">
                         <span className="truncate text-base font-bold text-white sm:text-lg">{item.nickname}</span>
-                        {aiParticipantIds.has(item.participantId) ? (
+                        {submissionNicknameIsAiInRoom(item.nickname, roomParticipantsSnapshot) ? (
                           <span className="shrink-0 rounded-full border border-violet-400/45 bg-violet-500/20 px-2 py-0.5 text-[10px] font-black uppercase tracking-wide text-violet-100">
                             AI
                           </span>
@@ -1680,7 +1847,7 @@ function RoundEndScoreboardOverlay({
                     </div>
                     <div className="border-t border-violet-400/30 bg-gradient-to-b from-violet-950/50 to-slate-950/80 px-3 py-3 sm:px-4 sm:py-4">
                       <p className="text-[10px] font-black uppercase tracking-[0.18em] text-violet-200 sm:text-[11px]">
-                        AI 추론 제시어
+                        AI 추론 결과
                       </p>
                       <p className="mt-1.5 break-words text-base font-bold leading-snug text-white sm:text-lg">
                         {item.aiAnswer.trim() || '—'}
@@ -1693,85 +1860,7 @@ function RoundEndScoreboardOverlay({
               </div>
             )}
 
-            <div className="mt-8 flex flex-col items-stretch justify-center gap-3 sm:flex-row sm:items-center sm:justify-center">
-              <button
-                type="button"
-                onClick={() => setStep(2)}
-                disabled={board.loading}
-                className="rounded-2xl bg-gradient-to-r from-cyan-500 to-blue-600 px-8 py-3 text-sm font-black text-white shadow-lg transition hover:from-cyan-400 hover:to-blue-500 disabled:opacity-50"
-              >
-                순위 보기
-              </button>
-              <button
-                type="button"
-                onClick={() =>
-                  onClose({ gameFinished: board.gameFinished, openFinalRanking: board.gameFinished })
-                }
-                className="rounded-2xl border border-white/20 bg-white/5 px-8 py-3 text-sm font-bold text-slate-200 transition hover:bg-white/10"
-              >
-                {board.gameFinished ? '건너뛰고 최종 순위로' : '닫기'}
-              </button>
-            </div>
-          </>
-        ) : (
-          <>
-            <div className="mb-6 text-center">
-              <p className="text-xs font-bold uppercase tracking-[0.2em] text-violet-300/90">누적 순위</p>
-              <h2 id="round-ranking-preview-title" className="mt-2 text-2xl font-black text-white sm:text-3xl">
-                지금까지 라운드 승 수
-              </h2>
-              <p className="mt-2 text-sm text-slate-400">
-                상위 {ROUND_END_RANKING_PREVIEW}명까지 표시합니다. 게임이 끝난 뒤에는 전체 순위 화면에서 자세히 볼 수
-                있어요.
-              </p>
-            </div>
-
-            {rankingLoading ? (
-              <div className="flex flex-col items-center justify-center gap-3 py-16 text-slate-400">
-                <div className="h-10 w-10 animate-spin rounded-full border-2 border-white/20 border-t-violet-400" />
-                <p className="text-sm font-medium">순위를 불러오는 중…</p>
-              </div>
-            ) : rankingError ? (
-              <p className="rounded-2xl border border-rose-500/30 bg-rose-500/10 px-4 py-6 text-center text-sm text-rose-200">
-                {rankingError}
-              </p>
-            ) : previewRows.length === 0 ? (
-              <p className="py-10 text-center text-sm text-slate-400">표시할 순위가 없습니다.</p>
-            ) : (
-              <ol className="mx-auto max-w-lg space-y-2">
-                {previewRows.map((row, index) => {
-                  const rank = index + 1;
-                  const medal =
-                    rank === 1 ? '🥇' : rank === 2 ? '🥈' : rank === 3 ? '🥉' : `${rank}`;
-                  return (
-                    <li
-                      key={row.userId}
-                      className="flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-slate-950/50 px-4 py-3.5"
-                    >
-                      <div className="flex min-w-0 flex-1 items-center gap-3">
-                        <span className="w-8 shrink-0 text-center text-lg">{medal}</span>
-                        <div className="min-w-0">
-                          <p className="truncate font-bold text-white">{row.nickname}</p>
-                          <p className="text-xs text-slate-500">누적 라운드 승</p>
-                        </div>
-                      </div>
-                      <span className="shrink-0 text-lg font-black tabular-nums text-cyan-200">
-                        {row.roundWinCount}회
-                      </span>
-                    </li>
-                  );
-                })}
-              </ol>
-            )}
-
             <div className="mt-8 flex flex-col items-stretch justify-center gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-center">
-              <button
-                type="button"
-                onClick={() => setStep(1)}
-                className="rounded-2xl border border-white/20 bg-white/5 px-8 py-3 text-sm font-bold text-slate-200 transition hover:bg-white/10"
-              >
-                이전
-              </button>
               {board.gameFinished ? (
                 <button
                   type="button"
@@ -1784,13 +1873,11 @@ function RoundEndScoreboardOverlay({
               <button
                 type="button"
                 onClick={() => onClose({ gameFinished: board.gameFinished, openFinalRanking: false })}
-                className="rounded-2xl bg-gradient-to-r from-blue-500 to-violet-500 px-8 py-3 text-sm font-black text-white shadow-lg transition hover:from-blue-400 hover:to-violet-400"
+                className="rounded-2xl border border-white/20 bg-white/5 px-8 py-3 text-sm font-bold text-slate-200 transition hover:bg-white/10"
               >
                 닫기
               </button>
             </div>
-          </>
-        )}
       </div>
     </div>
   );
@@ -1897,16 +1984,20 @@ function FinalRankingOverlay({
   );
 }
 
-const LIVE_RANKING_PANEL_MAX = 6;
+const LIVE_RANKING_PANEL_MAX = 12;
 
 function LiveRankingSystemPanel({
   rows,
   stompConnected,
+  previousRoundAi,
 }: {
   rows: FinalRankingRow[];
   stompConnected: boolean;
+  /** 직전 라운드에서 내가 받은 AI 추론·점수(라운드 전환 시 갱신) */
+  previousRoundAi: { answer: string; points: number } | null;
 }) {
   const preview = rows.slice(0, LIVE_RANKING_PANEL_MAX);
+  const totalListed = rows.length;
   return (
     <aside
       className="pointer-events-none fixed right-3 top-[4.5rem] z-[65] w-[260px] max-w-[calc(100vw-1.5rem)] select-none sm:right-5 sm:top-24"
@@ -1916,7 +2007,7 @@ function LiveRankingSystemPanel({
         <div className="flex items-start justify-between gap-2 border-b border-white/10 pb-2">
           <div>
             <p className="text-[10px] font-black uppercase tracking-[0.2em] text-amber-200/90">라운드별</p>
-            <h2 className="text-sm font-black text-white">랭킹 시스템</h2>
+            <h2 className="text-sm font-black text-white">랭킹</h2>
           </div>
           <span
             className={`mt-0.5 shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold ${
@@ -1927,28 +2018,46 @@ function LiveRankingSystemPanel({
             {stompConnected ? 'LIVE' : '…'}
           </span>
         </div>
-        <ol className="mt-2 max-h-[min(40vh,320px)] space-y-1.5 overflow-y-auto pr-0.5">
+        <ol className="mt-2 max-h-[min(48vh,380px)] space-y-1.5 overflow-y-auto pr-0.5">
           {preview.length === 0 ? (
             <li className="rounded-xl bg-white/[0.03] px-3 py-4 text-center text-xs text-slate-500">
               순위 데이터를 불러오는 중입니다.
             </li>
           ) : (
-            preview.map((row, i) => (
-              <li
-                key={row.userId}
-                className="flex items-center justify-between gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-2.5 py-1.5 text-sm"
-              >
-                <span className="flex min-w-0 flex-1 items-center gap-2">
-                  <span className="w-5 shrink-0 text-center text-xs font-black text-amber-200/90">{i + 1}</span>
-                  <span className="truncate font-semibold text-slate-100">{row.nickname}</span>
-                </span>
-                <span className="shrink-0 text-xs font-bold tabular-nums text-cyan-200">{row.roundWinCount}승</span>
-              </li>
-            ))
+            preview.map((row, i) => {
+              const rank = i + 1;
+              return (
+                <li
+                  key={row.userId}
+                  className="flex items-center justify-between gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-2.5 py-1.5 text-sm"
+                >
+                  <span className="flex min-w-0 flex-1 items-center gap-2">
+                    <span className="w-6 shrink-0 text-center text-xs font-black text-amber-200/90 tabular-nums">
+                      {rank}
+                    </span>
+                    <span className="truncate font-semibold text-slate-100">{row.nickname}</span>
+                  </span>
+                  <span className="shrink-0 text-xs font-bold tabular-nums text-cyan-200">{row.roundWinCount}승</span>
+                </li>
+              );
+            })
           )}
         </ol>
-        {rows.length > LIVE_RANKING_PANEL_MAX ? (
-          <p className="mt-1.5 text-center text-[10px] text-slate-500">외 {rows.length - LIVE_RANKING_PANEL_MAX}명</p>
+        {totalListed > LIVE_RANKING_PANEL_MAX ? (
+          <p className="mt-1.5 text-center text-[10px] text-slate-500">
+            외 {totalListed - LIVE_RANKING_PANEL_MAX}명 · 스크롤로 앞 순위 확인
+          </p>
+        ) : totalListed > 0 ? (
+          <p className="mt-1.5 text-center text-[10px] text-slate-500">총 {totalListed}명 기준 순위</p>
+        ) : null}
+        {previousRoundAi ? (
+          <div className="mt-2.5 border-t border-white/10 pt-2.5">
+            <p className="text-[10px] font-black uppercase tracking-[0.2em] text-amber-200/90">이전 라운드</p>
+            <p className="mt-1.5 text-[11px] font-semibold leading-snug text-slate-300">
+              AI 추론 결과: <span className="font-bold text-white">{previousRoundAi.answer}</span>
+            </p>
+            <p className="mt-1 text-sm font-black tabular-nums text-cyan-200">{previousRoundAi.points}점</p>
+          </div>
         ) : null}
       </div>
     </aside>
@@ -2051,16 +2160,17 @@ function InfoChip({
   tone = 'default',
 }: {
   label: string;
-  tone?: 'default' | 'green' | 'blue';
+  tone?: 'default' | 'green' | 'blue' | 'violet';
 }) {
   const className = {
     default: 'border-white/10 bg-slate-950/70 text-slate-200',
     green: 'border-emerald-400/30 bg-emerald-500/10 text-emerald-300',
     blue: 'border-blue-400/30 bg-blue-500/10 text-blue-300',
+    violet: 'border-violet-400/35 bg-violet-500/10 text-violet-200',
   }[tone];
 
   return (
-    <span className={`rounded-full border px-3 py-1.5 text-xs font-semibold ${className}`}>
+    <span className={`inline-flex shrink-0 items-center rounded-2xl border px-5 py-3 text-sm font-bold ${className}`}>
       {label}
     </span>
   );
@@ -2091,13 +2201,22 @@ function PlayerCard({ player }: { player: Player }) {
       <div className="flex flex-col items-center text-center">
         <div className="relative">
           <div
-            className={`flex h-20 w-20 items-center justify-center rounded-full border text-2xl font-black text-white shadow-[0_0_30px_rgba(59,130,246,0.18)] ${
+            className={`relative flex h-20 w-20 shrink-0 items-center justify-center overflow-hidden rounded-full border text-2xl font-black text-white shadow-[0_0_30px_rgba(59,130,246,0.18)] ${
               isAi
                 ? 'border-violet-400/50 bg-gradient-to-br from-violet-600/90 to-fuchsia-900/80 shadow-[0_0_28px_rgba(139,92,246,0.35)]'
                 : 'border-blue-400/30 bg-gradient-to-br from-[#0b1c3f] to-[#081122]'
             }`}
           >
-            {isAi ? '◇' : player.nickname.slice(0, 1)}
+            {isAi ? (
+              '◇'
+            ) : (
+              <ProfileImage
+                key={`${player.userId ?? player.id}-${player.profileImageUrl ?? ''}`}
+                src={player.profileImageUrl}
+                alt={`${player.nickname} 프로필`}
+                className="absolute inset-0 h-full w-full object-cover"
+              />
+            )}
           </div>
           <span
             className={`absolute bottom-1 right-1 h-4 w-4 rounded-full ${
@@ -2120,10 +2239,7 @@ function PlayerCard({ player }: { player: Player }) {
           )}
         </div>
 
-        <p className="mt-2 text-sm text-slate-400">
-          라운드 승리 {player.roundWinCount}회
-          {isAi ? <span className="text-violet-200/80"> · 봇 (자동 제출)</span> : null}
-        </p>
+        <p className="mt-2 text-sm text-slate-400">라운드 승리 {player.roundWinCount}회</p>
 
         <div className="mt-5 w-full rounded-2xl bg-slate-950/80 px-4 py-4">
           <p
@@ -2156,7 +2272,7 @@ const PALETTE = [
 function GameBoard({
   keyword,
   activeRoundId,
-  feedbackLine,
+  errorLine,
   instructionLine,
   stompChatLine,
   chatConnected,
@@ -2170,7 +2286,7 @@ function GameBoard({
   keyword: string;
   /** 라운드가 바뀌면 캔버스를 비움 (다음 라운드·로비 전환) */
   activeRoundId: number | null;
-  feedbackLine: string | null;
+  errorLine: string | null;
   instructionLine: string;
   stompChatLine: string | null;
   chatConnected: boolean;
@@ -2307,10 +2423,9 @@ function GameBoard({
           ) : null}
 
           <div className="flex w-full flex-col items-center gap-2 sm:gap-3">
-            {feedbackLine ? (
-              <div className="max-w-[min(100%,32rem)] rounded-2xl border border-amber-400/35 bg-amber-500/10 px-4 py-3 text-center shadow-inner sm:px-5 sm:py-3.5">
-                <p className="text-[10px] font-black uppercase tracking-[0.2em] text-amber-200/90">AI 채점</p>
-                <p className="mt-1.5 text-sm font-bold leading-relaxed text-amber-50 sm:text-base">{feedbackLine}</p>
+            {errorLine ? (
+              <div className="max-w-[min(100%,32rem)] rounded-2xl border border-rose-400/35 bg-rose-500/10 px-4 py-3 text-center sm:px-5 sm:py-3.5">
+                <p className="text-sm font-semibold leading-relaxed text-rose-100">{errorLine}</p>
               </div>
             ) : null}
             {stompChatLine ? (
