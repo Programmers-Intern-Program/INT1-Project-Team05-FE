@@ -258,6 +258,8 @@ export default function RoomsPage() {
 
         <section className="grid gap-5 lg:grid-cols-3">
           {lobbyRooms.map((room) => {
+            const isRoomFull = room.curPlayers >= room.maxPlayers;
+            const isJoinable = !room.isPlaying && !isRoomFull;
             const cardClass =
               'group relative overflow-hidden rounded-[2rem] border border-white/10 bg-slate-900/60 p-6 shadow-lg transition duration-300';
             const cardInteractive =
@@ -280,7 +282,7 @@ export default function RoomsPage() {
                       {room.title}
                     </h3>
                     <p className="mt-3 text-sm text-slate-400">
-                      주최 <span className="font-bold text-slate-200">{room.hostNickname}</span>
+                      Host <span className="font-bold text-slate-200">{room.hostNickname}</span>
                     </p>
                   </div>
 
@@ -301,30 +303,28 @@ export default function RoomsPage() {
 
                 <div className="mt-6 flex items-center justify-between">
                   <span className="text-sm text-slate-400">
-                    {room.maxPlayers - room.curPlayers > 0
-                      ? `${room.maxPlayers - room.curPlayers}자리 남음`
-                      : '정원 마감'}
+                    {!room.isPlaying && room.maxPlayers - room.curPlayers > 0 ? `${room.maxPlayers - room.curPlayers}자리 남음` : ''}
                   </span>
 
                   <span
                     className={`rounded-full border px-4 py-2 text-sm font-bold transition ${
-                      room.isPlaying
+                      !isJoinable
                         ? 'border-rose-500/30 bg-rose-500/10 text-rose-100'
                         : 'border border-white/10 bg-white/5 text-white group-hover:bg-blue-400/10 group-hover:border-blue-300/30'
                     }`}
                   >
-                    {room.isPlaying ? '진행 중 · 입장 불가' : '입장하기 →'}
+                    {!isJoinable ? (room.isPlaying ? '진행 중' : '인원 가득 참') : '입장하기 →'}
                   </span>
                 </div>
               </>
             );
 
-            if (room.isPlaying) {
+            if (!isJoinable) {
               return (
                 <div
                   key={room.roomId}
                   role="group"
-                  aria-label={`${room.title} — 게임 진행 중 입장 불가`}
+                  aria-label={`${room.title} — ${room.isPlaying ? '게임 진행 중' : '정원 마감'} 입장 불가`}
                   className={`${cardClass} ${cardDisabled}`}
                 >
                   {inner}
