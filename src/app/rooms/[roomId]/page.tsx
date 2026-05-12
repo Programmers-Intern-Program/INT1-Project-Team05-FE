@@ -9,7 +9,6 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { createPortal } from "react-dom";
 import type { DrawingCanvasHandle } from "@/components/DrawingCanvas";
@@ -1018,7 +1017,7 @@ export default function RoomDetailPage() {
       }
       /* 그 외 STOMP 동기화 실패는 조용히 무시 */
     }
-  }, [roomIdNumber, clearRoomChatLog]);
+  }, [roomIdNumber]);
 
   useEffect(() => {
     refreshRoomParticipantsRef.current = refreshRoomParticipants;
@@ -1235,8 +1234,7 @@ export default function RoomDetailPage() {
           if (modPhase === "AI" && traceId) {
             setRoomChatMessages((prev) => {
               const idx = prev.findIndex(
-                (r) =>
-                  r.kind === "TALK" && r.moderationTraceId === traceId,
+                (r) => r.kind === "TALK" && r.moderationTraceId === traceId,
               );
               if (idx >= 0) {
                 const next = [...prev];
@@ -1509,7 +1507,6 @@ export default function RoomDetailPage() {
       roundInfo,
       scheduleRoundAdvanceSync,
       appendRoomChatEntry,
-      roundInfo?.roundId,
     ],
   );
 
@@ -1738,6 +1735,7 @@ export default function RoomDetailPage() {
     const answer = String(submitInfo.submittedAiAnswer ?? "").trim();
     myAiRoundSubmitByRoundIdRef.current.set(rid, { points: pts, answer });
   }, [
+    roundInfo,
     roundInfo?.roundId,
     roundInfo?.status,
     submitInfo?.submittedAiAnswer,
@@ -2118,9 +2116,12 @@ export default function RoomDetailPage() {
     setFriendInviteList([]);
     setError("");
     try {
-      const list = await apiFetch<FriendListItemForInvite[]>("/api/friendship", {
-        method: "GET",
-      });
+      const list = await apiFetch<FriendListItemForInvite[]>(
+        "/api/friendship",
+        {
+          method: "GET",
+        },
+      );
       setFriendInviteList(Array.isArray(list) ? list : []);
     } catch {
       setFriendInviteList([]);
@@ -2145,9 +2146,7 @@ export default function RoomDetailPage() {
         );
         setFriendInviteOpen(false);
       } catch (e) {
-        setError(
-          e instanceof Error ? e.message : "초대를 보내지 못했습니다.",
-        );
+        setError(e instanceof Error ? e.message : "초대를 보내지 못했습니다.");
       } finally {
         setFriendInviteSendingId(null);
       }
@@ -2349,9 +2348,7 @@ export default function RoomDetailPage() {
                         onClick={() => void sendRoomInvite(f.id)}
                         className="shrink-0 rounded-lg bg-gradient-to-r from-blue-500 to-violet-500 px-3 py-1.5 text-xs font-bold text-white shadow-md transition hover:from-blue-400 hover:to-violet-400 disabled:opacity-50"
                       >
-                        {friendInviteSendingId === f.id
-                          ? "전송 중…"
-                          : "초대"}
+                        {friendInviteSendingId === f.id ? "전송 중…" : "초대"}
                       </button>
                     </li>
                   ))}
@@ -2479,6 +2476,7 @@ function RoundEndScoreboardOverlay({
                     </div>
                     <div className="relative aspect-square w-full bg-white">
                       {imageSrc ? (
+                        // eslint-disable-next-line @next/next/no-img-element
                         <img
                           src={imageSrc}
                           alt={`${item.nickname} 제출`}

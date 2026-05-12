@@ -282,9 +282,7 @@ const DrawingCanvasInner = forwardRef<DrawingCanvasHandle, DrawingCanvasProps>(
       ref,
       () => ({
         toDataUrl: () =>
-          canvasRef.current
-            ? canvasToCompressedDataUrl(canvasRef.current)
-            : "",
+          canvasRef.current ? canvasToCompressedDataUrl(canvasRef.current) : "",
         clear: () => {
           fillWhite();
           strokeCount.current = 0;

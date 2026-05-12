@@ -29,7 +29,6 @@ export function useUserNotificationsStomp(
 
   useEffect(() => {
     if (!token || userId == null || !Number.isFinite(userId) || userId <= 0) {
-      setConnected(false);
       return;
     }
 
