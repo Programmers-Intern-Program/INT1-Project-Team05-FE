@@ -27,9 +27,103 @@ type DrawingCanvasProps = {
   strokeColor: string;
   lineWidth: number;
   isEraser: boolean;
+  /** 페인트통: 클릭한 닫힌 영역을 현재 색으로 채움 */
+  isFill: boolean;
   strokeOpacity?: number;
   className?: string;
 };
+
+const FILL_TOLERANCE_BASE = 26;
+
+function parseCssColorToRgb(color: string): [number, number, number] {
+  const c = color.trim();
+  if (c.startsWith('#')) {
+    const hex = c.slice(1);
+    if (hex.length === 3) {
+      return [
+        parseInt(hex[0]! + hex[0]!, 16),
+        parseInt(hex[1]! + hex[1]!, 16),
+        parseInt(hex[2]! + hex[2]!, 16),
+      ];
+    }
+    if (hex.length === 6) {
+      return [
+        parseInt(hex.slice(0, 2), 16),
+        parseInt(hex.slice(2, 4), 16),
+        parseInt(hex.slice(4, 6), 16),
+      ];
+    }
+  }
+  const m = c.match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/i);
+  if (m) return [Number(m[1]), Number(m[2]), Number(m[3])];
+  return [0, 0, 0];
+}
+
+/** 스캔라인 근처 색이 비슷한 픽셀을 불투명 `fillRgba`로 바꾼다. 변경이 있으면 true. */
+function floodFillOpaque(
+  imageData: ImageData,
+  width: number,
+  height: number,
+  startX: number,
+  startY: number,
+  fillR: number,
+  fillG: number,
+  fillB: number,
+  fillA: number,
+  tolerance: number,
+): boolean {
+  const d = imageData.data;
+  const sx = Math.max(0, Math.min(width - 1, Math.floor(startX)));
+  const sy = Math.max(0, Math.min(height - 1, Math.floor(startY)));
+  const si = (sy * width + sx) * 4;
+  const sr = d[si]!;
+  const sg = d[si + 1]!;
+  const sb = d[si + 2]!;
+  const sa = d[si + 3]!;
+
+  const withinTol = (i: number) =>
+    Math.abs(d[i]! - sr) <= tolerance &&
+    Math.abs(d[i + 1]! - sg) <= tolerance &&
+    Math.abs(d[i + 2]! - sb) <= tolerance &&
+    Math.abs(d[i + 3]! - sa) <= tolerance;
+
+  const nearSameAsFill = (i: number) =>
+    Math.abs(d[i]! - fillR) <= tolerance &&
+    Math.abs(d[i + 1]! - fillG) <= tolerance &&
+    Math.abs(d[i + 2]! - fillB) <= tolerance &&
+    Math.abs(d[i + 3]! - fillA) <= tolerance;
+
+  if (nearSameAsFill(si)) return false;
+
+  const visited = new Uint8Array(width * height);
+  const stack: number[] = [sx + sy * width];
+  const idx = (x: number, y: number) => (y * width + x) * 4;
+  const vI = (x: number, y: number) => y * width + x;
+  let changed = false;
+
+  while (stack.length > 0) {
+    const cur = stack.pop()!;
+    const x = cur % width;
+    const y = Math.floor(cur / width);
+    if (x < 0 || y < 0 || x >= width || y >= height) continue;
+    const vi = vI(x, y);
+    if (visited[vi]) continue;
+    const i = idx(x, y);
+    if (!withinTol(i)) continue;
+    visited[vi] = 1;
+    d[i] = fillR;
+    d[i + 1] = fillG;
+    d[i + 2] = fillB;
+    d[i + 3] = fillA;
+    changed = true;
+    if (x + 1 < width) stack.push(x + 1 + y * width);
+    if (x - 1 >= 0) stack.push(x - 1 + y * width);
+    if (y + 1 < height) stack.push(x + (y + 1) * width);
+    if (y - 1 >= 0) stack.push(x + (y - 1) * width);
+  }
+
+  return changed;
+}
 
 /** 한 번의 layout read로 CSS·비트맵 좌표를 같이 계산한다 (호버 시 getBoundingClientRect 이중 호출 방지). */
 function readPointerCoords(canvas: HTMLCanvasElement, clientX: number, clientY: number) {
@@ -45,7 +139,10 @@ function readPointerCoords(canvas: HTMLCanvasElement, clientX: number, clientY: 
 }
 
 const DrawingCanvasInner = forwardRef<DrawingCanvasHandle, DrawingCanvasProps>(
-  function DrawingCanvas({ strokeColor, lineWidth, isEraser, strokeOpacity = 1, className }, ref) {
+  function DrawingCanvas(
+    { strokeColor, lineWidth, isEraser, isFill, strokeOpacity = 1, className },
+    ref,
+  ) {
     const isHighlighter = !isEraser && strokeOpacity < 0.95;
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const isDrawing = useRef(false);
@@ -212,12 +309,32 @@ const DrawingCanvasInner = forwardRef<DrawingCanvasHandle, DrawingCanvasProps>(
       }
       pendingHoverClientRef.current = null;
       e.preventDefault();
-      canvas.setPointerCapture(e.pointerId);
-      isDrawing.current = true;
-      strokeDirty.current = false;
+
       const { css, bitmap } = readPointerCoords(canvas, e.clientX, e.clientY);
       applyCursorTransform(css.x, css.y);
       setCursorVisible(true);
+
+      if (isFill) {
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+        const w = canvas.width;
+        const h = canvas.height;
+        const imageData = ctx.getImageData(0, 0, w, h);
+        const [fr, fg, fb] = parseCssColorToRgb(strokeColor);
+        const fa = 255;
+        const tol = FILL_TOLERANCE_BASE + Math.floor(lineWidth / 3);
+        const changed = floodFillOpaque(imageData, w, h, bitmap.x, bitmap.y, fr, fg, fb, fa, tol);
+        if (changed) {
+          ctx.putImageData(imageData, 0, 0);
+          strokeCount.current += 1;
+          pushHistory();
+        }
+        return;
+      }
+
+      canvas.setPointerCapture(e.pointerId);
+      isDrawing.current = true;
+      strokeDirty.current = false;
       lastPoint.current = bitmap;
       paintDot(bitmap);
     };
@@ -312,22 +429,35 @@ const DrawingCanvasInner = forwardRef<DrawingCanvasHandle, DrawingCanvasProps>(
           aria-hidden={!cursorVisible}
         >
             <div
-              style={{
-                width: `${(isEraser ? lineWidth * 2.5 : lineWidth) + 6}px`,
-                height: `${(isEraser ? lineWidth * 2.5 : lineWidth) + 6}px`,
-                transform: 'translate(-50%, -50%)',
-                borderRadius: '9999px',
-                border: isHighlighter
-                  ? '2px solid rgba(168,85,247,0.95)'
-                  : '2px solid rgba(15,23,42,0.85)',
-                boxShadow:
-                  '0 0 0 2px rgba(255,255,255,0.7), 0 0 10px rgba(2,6,23,0.18)',
-                background: isEraser
-                  ? 'rgba(226,232,240,0.18)'
-                  : isHighlighter
-                    ? 'rgba(168,85,247,0.08)'
-                    : 'transparent',
-              }}
+              style={
+                isFill
+                  ? {
+                      width: 22,
+                      height: 22,
+                      transform: 'translate(-50%, -50%)',
+                      borderRadius: 6,
+                      border: '2px solid rgba(15,23,42,0.88)',
+                      boxShadow: '0 0 0 2px rgba(255,255,255,0.65)',
+                      background:
+                        'linear-gradient(135deg, rgba(34,211,238,0.35) 0%, rgba(59,130,246,0.35) 100%)',
+                    }
+                  : {
+                      width: `${(isEraser ? lineWidth * 2.5 : lineWidth) + 6}px`,
+                      height: `${(isEraser ? lineWidth * 2.5 : lineWidth) + 6}px`,
+                      transform: 'translate(-50%, -50%)',
+                      borderRadius: '9999px',
+                      border: isHighlighter
+                        ? '2px solid rgba(168,85,247,0.95)'
+                        : '2px solid rgba(15,23,42,0.85)',
+                      boxShadow:
+                        '0 0 0 2px rgba(255,255,255,0.7), 0 0 10px rgba(2,6,23,0.18)',
+                      background: isEraser
+                        ? 'rgba(226,232,240,0.18)'
+                        : isHighlighter
+                          ? 'rgba(168,85,247,0.08)'
+                          : 'transparent',
+                    }
+              }
             />
           </div>
         </div>

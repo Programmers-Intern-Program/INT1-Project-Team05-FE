@@ -1,6 +1,14 @@
 'use client';
 
-import { startTransition, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  startTransition,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { createPortal } from 'react-dom';
 import type { DrawingCanvasHandle } from '@/components/DrawingCanvas';
@@ -2305,7 +2313,7 @@ function PlayerCard({ player }: { player: Player }) {
   );
 }
 
-type BrushKind = 'pen' | 'highlighter' | 'eraser';
+type BrushKind = 'pen' | 'highlighter' | 'eraser' | 'fill';
 
 const PALETTE = [
   { name: '검정', color: '#171717' },
@@ -2358,6 +2366,7 @@ function GameBoard({
   const [submitConfirmOpen, setSubmitConfirmOpen] = useState(false);
   const submitConfirmLockRef = useRef(false);
   const lastTimeOverSignalRef = useRef(0);
+  const isFill = brush === 'fill';
   const isEraser = brush === 'eraser';
   const isHighlighter = brush === 'highlighter';
   const effectiveLineWidth = isHighlighter ? Math.round(lineWidth * 1.8) : lineWidth;
@@ -2485,10 +2494,10 @@ function GameBoard({
             <p className="max-w-[520px] text-center text-sm leading-relaxed text-slate-300">{instructionLine}</p>
             <div className="flex flex-wrap items-center justify-center gap-2 sm:gap-3">
               <div className="rounded-2xl border border-white/10 bg-slate-950/50 px-4 py-2 text-sm font-bold text-slate-200">
-                굵기 {lineWidth}px
+                사이즈 {lineWidth}px
               </div>
               <div className="rounded-2xl border border-white/10 bg-slate-950/50 px-4 py-2 text-sm font-bold text-slate-200">
-                {isEraser ? '지우개' : isHighlighter ? '형광펜' : '펜'}
+                {isFill ? '채우기' : isEraser ? '지우개' : isHighlighter ? '형광펜' : '펜'}
               </div>
             </div>
           </div>
@@ -2501,6 +2510,7 @@ function GameBoard({
               strokeColor={isEraser ? '#ffffff' : strokeColor}
               lineWidth={effectiveLineWidth}
               isEraser={isEraser}
+              isFill={isFill}
               strokeOpacity={effectiveOpacity}
             />
           </div>
@@ -2701,23 +2711,37 @@ function DrawingToolbar({
         <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
           <div className="flex flex-wrap items-center gap-3">
             <ToolButton
-              label="펜"
+              ariaLabel="펜"
               active={brush === 'pen'}
               disabled={interactionLocked}
               onClick={() => onBrushChange('pen')}
-            />
+            >
+              <PenToolIcon className="h-5 w-5" />
+            </ToolButton>
             <ToolButton
-              label="형광펜"
+              ariaLabel="형광펜"
               active={brush === 'highlighter'}
               disabled={interactionLocked}
               onClick={() => onBrushChange('highlighter')}
-            />
+            >
+              <HighlighterToolIcon className="h-5 w-5" />
+            </ToolButton>
             <ToolButton
-              label="지우개"
+              ariaLabel="지우개"
               active={brush === 'eraser'}
               disabled={interactionLocked}
               onClick={() => onBrushChange('eraser')}
-            />
+            >
+              <EraserToolIcon className="h-5 w-5" />
+            </ToolButton>
+            <ToolButton
+              ariaLabel="채우기"
+              active={brush === 'fill'}
+              disabled={interactionLocked}
+              onClick={() => onBrushChange('fill')}
+            >
+              <FillToolIcon className="h-5 w-5" />
+            </ToolButton>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             {PALETTE.map((p) => (
@@ -2750,7 +2774,7 @@ function DrawingToolbar({
             </label>
           </div>
           <div className="flex items-center gap-2 rounded-2xl border border-white/10 bg-slate-900/60 px-3 py-2">
-            <span className="shrink-0 text-xs font-bold text-slate-400">펜 굵기</span>
+            <span className="shrink-0 text-xs font-bold text-slate-400">사이즈</span>
             <input
               type="range"
               min={2}
@@ -2760,7 +2784,7 @@ function DrawingToolbar({
               disabled={interactionLocked}
               onChange={(e) => onLineWidthChange(Number(e.target.value))}
               className="h-2 w-[min(100%,140px)] cursor-pointer accent-blue-500 disabled:cursor-not-allowed sm:w-32"
-              aria-label="펜 굵기"
+              aria-label="사이즈"
             />
             <span className="w-10 shrink-0 text-right font-mono text-xs font-bold text-slate-200">{lineWidth}px</span>
           </div>
@@ -2772,8 +2796,8 @@ function DrawingToolbar({
                 style={{
                   width: '80%',
                   height: Math.max(2, Math.round(lineWidth / 2)),
-                  backgroundColor: brush === 'eraser' ? '#e2e8f0' : strokeColor,
-                  opacity: brush === 'highlighter' ? 0.35 : 1,
+                  backgroundColor: brush === 'fill' ? strokeColor : brush === 'eraser' ? '#e2e8f0' : strokeColor,
+                  opacity: brush === 'fill' ? 1 : brush === 'highlighter' ? 0.35 : 1,
                 }}
               />
             </div>
@@ -2869,13 +2893,97 @@ function DrawingToolbar({
   );
 }
 
+function PenToolIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M12 20h9" />
+      <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" />
+    </svg>
+  );
+}
+
+function HighlighterToolIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M5 20h6" />
+      <path d="M7 20V10l9-7 5 5-9 7H7z" />
+      <path d="M14 5l5 5" />
+    </svg>
+  );
+}
+
+function EraserToolIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21" />
+      <path d="M22 21H7" />
+      <path d="m5 11 9 9" />
+    </svg>
+  );
+}
+
+function FillToolIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      {/* 손잡이 — 통 왼쪽 위에서 위로 휘어짐 */}
+      <path d="M6.5 10C4.2 8.5 3 5.8 4.2 3.6S8.2 1 10.6 2.4" />
+      {/* 위 입구(타원 림) */}
+      <ellipse cx="12" cy="10" rx="5.25" ry="1.85" />
+      {/* 통 벽 */}
+      <path d="M6.75 10.2v8.1c0 1.55 2.35 2.45 5.25 2.45S17.25 19.85 17.25 18.2v-8" />
+      {/* 바닥 곡선 */}
+      <path d="M6.75 18.2c0 0 2.1 2.05 5.25 2.05S17.25 18.2 17.25 18.2" />
+      {/* 페인트 한 방울 */}
+      <path d="M12 20.3v2.2" />
+    </svg>
+  );
+}
+
 function ToolButton({
-  label,
+  children,
+  ariaLabel,
   active = false,
   disabled = false,
   onClick,
 }: {
-  label: string;
+  children: ReactNode;
+  ariaLabel: string;
   active?: boolean;
   disabled?: boolean;
   onClick: () => void;
@@ -2885,13 +2993,15 @@ function ToolButton({
       type="button"
       disabled={disabled}
       onClick={onClick}
-      className={`rounded-2xl px-4 py-3 text-sm font-bold transition disabled:opacity-45 ${
+      aria-label={ariaLabel}
+      title={ariaLabel}
+      className={`inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl transition disabled:opacity-45 ${
         active
-          ? 'bg-blue-500 text-white'
+          ? 'bg-blue-500 text-white shadow-md shadow-blue-500/25'
           : 'border border-white/10 bg-slate-900/60 text-slate-200 hover:bg-slate-800/60 hover:border-blue-300/30'
       }`}
     >
-      {label}
+      {children}
     </button>
   );
 }
