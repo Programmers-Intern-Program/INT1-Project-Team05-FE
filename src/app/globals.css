@@ -1,5 +1,10 @@
 @import "tailwindcss";
 
+/* 다크 셸: dev 번들에서 뒤에 붙는 body 배경 규칙이 덮어쓰지 못하도록 고정 */
+html {
+  color-scheme: dark;
+}
+
 html,
 body {
   margin: 0;
@@ -16,8 +21,8 @@ body {
       rgba(168, 85, 247, 0.16),
       transparent 32%
     ),
-    linear-gradient(160deg, #020617 0%, #0b1124 45%, #111827 100%);
-  color: #f8fafc;
+    linear-gradient(160deg, #020617 0%, #0b1124 45%, #111827 100%) !important;
+  color: #f8fafc !important;
 }
 
 * {

@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import Header from "@/components/Header";
+import RoomInviteNotifier from "@/components/RoomInviteNotifier";
 
 export const metadata: Metadata = {
   title: "DrawRace",
@@ -16,6 +17,7 @@ export default function RootLayout({
     <html lang="ko">
       <body className="min-h-screen text-slate-100 antialiased">
         <Header />
+        <RoomInviteNotifier />
         {children}
       </body>
     </html>

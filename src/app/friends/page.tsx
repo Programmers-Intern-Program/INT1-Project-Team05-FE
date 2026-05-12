@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { ProfileImage } from "@/components/ProfileImage";
 import { apiFetch, getHttpStatus } from "@/lib/api-client";
@@ -116,46 +116,47 @@ function FriendsPageContent() {
     return () => window.clearTimeout(timer);
   }, [lastDeletedFriendId]);
 
-  async function withAuth<T>(
-    task: () => Promise<T>,
-  ): Promise<T | typeof AUTH_REDIRECT> {
-    try {
-      return await task();
-    } catch (e) {
-      const status = getHttpStatus(e);
-      if (isUnauthorizedStatus(status)) {
-        clearAuthSession();
-        router.replace("/login");
-        return AUTH_REDIRECT;
+  const withAuth = useCallback(
+    async <T,>(task: () => Promise<T>): Promise<T | typeof AUTH_REDIRECT> => {
+      try {
+        return await task();
+      } catch (e) {
+        const status = getHttpStatus(e);
+        if (isUnauthorizedStatus(status)) {
+          clearAuthSession();
+          router.replace("/login");
+          return AUTH_REDIRECT;
+        }
+        throw e;
       }
-      throw e;
-    }
-  }
+    },
+    [router],
+  );
 
-  async function loadReceived() {
+  const loadReceived = useCallback(async () => {
     const data = await withAuth(() =>
       apiFetch<FriendRequestResponse[]>("/api/friendship/requests/received", {
         method: "GET",
       }),
     );
     if (data !== AUTH_REDIRECT) setReceived(data);
-  }
+  }, [withAuth]);
 
-  async function loadSent() {
+  const loadSent = useCallback(async () => {
     const data = await withAuth(() =>
       apiFetch<FriendRequestResponse[]>("/api/friendship/requests/sent", {
         method: "GET",
       }),
     );
     if (data !== AUTH_REDIRECT) setSent(data);
-  }
+  }, [withAuth]);
 
-  async function loadFriends() {
+  const loadFriends = useCallback(async () => {
     const data = await withAuth(() =>
       apiFetch<FriendInfoResponse[]>("/api/friendship", { method: "GET" }),
     );
     if (data !== AUTH_REDIRECT) setFriends(data);
-  }
+  }, [withAuth]);
 
   useEffect(() => {
     void (async () => {
@@ -165,7 +166,7 @@ function FriendsPageContent() {
         /* 초기 배지용 프리로드 실패는 조용히 무시 */
       }
     })();
-  }, []);
+  }, [loadFriends, loadReceived, loadSent]);
 
   useEffect(() => {
     if (activeTab === "received") {
@@ -215,7 +216,7 @@ function FriendsPageContent() {
         }
       })();
     }
-  }, [activeTab]);
+  }, [activeTab, loadFriends, loadReceived, loadSent]);
 
   async function handleSearch() {
     const query = searchNickname.trim();

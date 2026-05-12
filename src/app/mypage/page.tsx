@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ProfileImage } from "@/components/ProfileImage";
 import { apiFetch, getHttpStatus } from "@/lib/api-client";
@@ -37,7 +37,7 @@ export default function MyPage() {
     return Math.round((user.winGameCount / user.totalGameCount) * 1000) / 10;
   }, [user]);
 
-  async function loadMyInfo() {
+  const loadMyInfo = useCallback(async () => {
     setLoading(true);
     setError("");
     try {
@@ -57,13 +57,13 @@ export default function MyPage() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [router]);
 
   useEffect(() => {
     queueMicrotask(() => {
       void loadMyInfo();
     });
-  }, []);
+  }, [loadMyInfo]);
 
   async function handleSaveProfile() {
     if (!user) return;

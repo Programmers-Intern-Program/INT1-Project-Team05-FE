@@ -21,7 +21,9 @@ export default function RoomsPage() {
   const [ghostSuppressedIds, setGhostSuppressedIds] = useState<Set<number>>(
     new Set(),
   );
+  /** 방 만들기 버튼용; 목록 폴링과 state 공유 시 빈 목록 문구가 깜빡임 */
   const [loading, setLoading] = useState(false);
+  const [listReady, setListReady] = useState(false);
   const [error, setError] = useState("");
   const ghostCandidateSinceRef = useRef<Map<number, number>>(new Map());
 
@@ -53,7 +55,6 @@ export default function RoomsPage() {
 
   async function loadRooms() {
     try {
-      setLoading(true);
       setError("");
       const data = await apiFetch<Room[]>(`/api/rooms`, { method: "GET" });
       setRooms(data ?? []);
@@ -71,7 +72,7 @@ export default function RoomsPage() {
         e instanceof Error ? e.message : "방 목록을 불러오지 못했습니다.",
       );
     } finally {
-      setLoading(false);
+      setListReady(true);
     }
   }
 
@@ -386,7 +387,7 @@ export default function RoomsPage() {
           })}
         </section>
 
-        {lobbyRooms.length === 0 && !loading && (
+        {lobbyRooms.length === 0 && listReady && !loading && (
           <div className="mt-10 rounded-[2rem] border border-white/10 bg-white/[0.04] p-12 text-center shadow-2xl backdrop-blur">
             <p className="text-2xl font-black text-white">
               아직 생성된 방이 없습니다.
