@@ -5,6 +5,20 @@ import { useEffect, useState } from 'react';
 
 export default function HomePage() {
   const [infoModal, setInfoModal] = useState<null | 'game' | 'features'>(null);
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
+
+  useEffect(() => {
+    const syncAuth = () => {
+      setIsLoggedIn(Boolean(typeof window !== 'undefined' && localStorage.getItem('accessToken')));
+    };
+    syncAuth();
+    window.addEventListener('storage', syncAuth);
+    window.addEventListener('auth-changed', syncAuth);
+    return () => {
+      window.removeEventListener('storage', syncAuth);
+      window.removeEventListener('auth-changed', syncAuth);
+    };
+  }, []);
 
   useEffect(() => {
     if (!infoModal) return;
@@ -46,12 +60,14 @@ export default function HomePage() {
               방 목록 보기
             </Link>
 
-            <Link
-              href="/login"
-              className="rounded-xl border border-white/15 bg-white/5 px-6 py-3 font-semibold text-white transition hover:bg-white/10"
-            >
-              로그인
-            </Link>
+            {!isLoggedIn ? (
+              <Link
+                href="/login"
+                className="rounded-xl border border-white/15 bg-white/5 px-6 py-3 font-semibold text-white transition hover:bg-white/10"
+              >
+                로그인
+              </Link>
+            ) : null}
           </div>
 
           <div className="mt-5 flex flex-wrap gap-2">

@@ -2,6 +2,7 @@
 
 import {
   forwardRef,
+  memo,
   useCallback,
   useEffect,
   useImperativeHandle,
@@ -30,25 +31,20 @@ type DrawingCanvasProps = {
   className?: string;
 };
 
-function getPointerPos(canvas: HTMLCanvasElement, clientX: number, clientY: number) {
+/** 한 번의 layout read로 CSS·비트맵 좌표를 같이 계산한다 (호버 시 getBoundingClientRect 이중 호출 방지). */
+function readPointerCoords(canvas: HTMLCanvasElement, clientX: number, clientY: number) {
   const rect = canvas.getBoundingClientRect();
-  const scaleX = canvas.width / rect.width;
-  const scaleY = canvas.height / rect.height;
+  const xCss = clientX - rect.left;
+  const yCss = clientY - rect.top;
+  const sx = canvas.width / rect.width;
+  const sy = canvas.height / rect.height;
   return {
-    x: (clientX - rect.left) * scaleX,
-    y: (clientY - rect.top) * scaleY,
+    css: { x: xCss, y: yCss },
+    bitmap: { x: xCss * sx, y: yCss * sy },
   };
 }
 
-function getPointerPosCss(canvas: HTMLCanvasElement, clientX: number, clientY: number) {
-  const rect = canvas.getBoundingClientRect();
-  return {
-    x: clientX - rect.left,
-    y: clientY - rect.top,
-  };
-}
-
-export const DrawingCanvas = forwardRef<DrawingCanvasHandle, DrawingCanvasProps>(
+const DrawingCanvasInner = forwardRef<DrawingCanvasHandle, DrawingCanvasProps>(
   function DrawingCanvas({ strokeColor, lineWidth, isEraser, strokeOpacity = 1, className }, ref) {
     const isHighlighter = !isEraser && strokeOpacity < 0.95;
     const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -60,11 +56,12 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandle, DrawingCanvasProps>
     const redoRef = useRef<string[]>([]);
     const isRestoring = useRef(false);
     const rafRef = useRef<number | null>(null);
-    const [cursor, setCursor] = useState<{ x: number; y: number; visible: boolean }>({
-      x: 0,
-      y: 0,
-      visible: false,
-    });
+    /** 호버 시 pointermove가 rAF보다 촘촘할 때 layout read를 프레임당 1회로 줄인다. */
+    const hoverRafRef = useRef<number | null>(null);
+    const pendingHoverClientRef = useRef<{ x: number; y: number } | null>(null);
+    /** 위치는 ref + DOM으로만 갱신해 포인터 이동마다 리렌더가 나지 않게 한다. */
+    const cursorWrapRef = useRef<HTMLDivElement>(null);
+    const [cursorVisible, setCursorVisible] = useState(false);
 
     const fillWhite = useCallback(() => {
       const canvas = canvasRef.current;
@@ -123,6 +120,10 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandle, DrawingCanvasProps>
       historyRef.current = [];
       redoRef.current = [];
       pushHistory();
+      return () => {
+        if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
+        if (hoverRafRef.current != null) cancelAnimationFrame(hoverRafRef.current);
+      };
     }, [fillWhite]);
 
     const paintStroke = useCallback(
@@ -197,34 +198,60 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandle, DrawingCanvasProps>
       canRedo: () => redoRef.current.length > 0,
     }));
 
+    const applyCursorTransform = useCallback((x: number, y: number) => {
+      const el = cursorWrapRef.current;
+      if (el) el.style.transform = `translate(${x}px, ${y}px)`;
+    }, []);
+
     const onPointerDown = (e: PointerEvent<HTMLCanvasElement>) => {
       const canvas = canvasRef.current;
       if (!canvas) return;
+      if (hoverRafRef.current != null) {
+        cancelAnimationFrame(hoverRafRef.current);
+        hoverRafRef.current = null;
+      }
+      pendingHoverClientRef.current = null;
       e.preventDefault();
       canvas.setPointerCapture(e.pointerId);
       isDrawing.current = true;
       strokeDirty.current = false;
-      const pCss = getPointerPosCss(canvas, e.clientX, e.clientY);
-      setCursor({ x: pCss.x, y: pCss.y, visible: true });
-      const p = getPointerPos(canvas, e.clientX, e.clientY);
-      lastPoint.current = p;
-      paintDot(p);
+      const { css, bitmap } = readPointerCoords(canvas, e.clientX, e.clientY);
+      applyCursorTransform(css.x, css.y);
+      setCursorVisible(true);
+      lastPoint.current = bitmap;
+      paintDot(bitmap);
     };
 
     const onPointerMove = (e: PointerEvent<HTMLCanvasElement>) => {
       const canvas = canvasRef.current;
       if (!canvas) return;
-      e.preventDefault();
-      const pCss = getPointerPosCss(canvas, e.clientX, e.clientY);
-      const p = getPointerPos(canvas, e.clientX, e.clientY);
+      const drawing = isDrawing.current && lastPoint.current != null;
+      if (drawing) e.preventDefault();
+
+      if (!drawing) {
+        pendingHoverClientRef.current = { x: e.clientX, y: e.clientY };
+        if (hoverRafRef.current == null) {
+          hoverRafRef.current = requestAnimationFrame(() => {
+            hoverRafRef.current = null;
+            const c = canvasRef.current;
+            const pending = pendingHoverClientRef.current;
+            if (!c || !pending) return;
+            const { css } = readPointerCoords(c, pending.x, pending.y);
+            applyCursorTransform(css.x, css.y);
+          });
+        }
+        return;
+      }
+
+      const { css, bitmap } = readPointerCoords(canvas, e.clientX, e.clientY);
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
       rafRef.current = requestAnimationFrame(() => {
-        setCursor({ x: pCss.x, y: pCss.y, visible: true });
+        applyCursorTransform(css.x, css.y);
       });
 
-      if (!isDrawing.current || !lastPoint.current) return;
-      paintStroke(lastPoint.current, p);
-      lastPoint.current = p;
+      if (!lastPoint.current) return;
+      paintStroke(lastPoint.current, bitmap);
+      lastPoint.current = bitmap;
     };
 
     const endStroke = () => {
@@ -249,29 +276,41 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandle, DrawingCanvasProps>
           ref={canvasRef}
           className="h-full w-full rounded-xl"
           style={{ cursor: 'none' }}
+          onPointerEnter={(e) => {
+            const canvas = canvasRef.current;
+            if (!canvas) return;
+            const { css } = readPointerCoords(canvas, e.clientX, e.clientY);
+            applyCursorTransform(css.x, css.y);
+            setCursorVisible(true);
+          }}
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
           onPointerUp={() => {
             endStroke();
-            setCursor((prev) => ({ ...prev, visible: true }));
+            setCursorVisible(true);
           }}
           onPointerCancel={() => {
             endStroke();
-            setCursor((prev) => ({ ...prev, visible: false }));
+            setCursorVisible(false);
           }}
           onPointerLeave={(e: PointerEvent<HTMLCanvasElement>) => {
             if (e.buttons === 0) endStroke();
-            setCursor((prev) => ({ ...prev, visible: false }));
+            if (hoverRafRef.current != null) {
+              cancelAnimationFrame(hoverRafRef.current);
+              hoverRafRef.current = null;
+            }
+            pendingHoverClientRef.current = null;
+            setCursorVisible(false);
           }}
         />
-        {cursor.visible ? (
-          <div
-            className="pointer-events-none absolute left-0 top-0"
-            style={{
-              transform: `translate(${cursor.x}px, ${cursor.y}px)`,
-            }}
-            aria-hidden="true"
-          >
+        <div
+          ref={cursorWrapRef}
+          className={`pointer-events-none absolute left-0 top-0 will-change-transform ${
+            cursorVisible ? 'opacity-100' : 'opacity-0'
+          }`}
+          style={{ transform: 'translate(0px, 0px)' }}
+          aria-hidden={!cursorVisible}
+        >
             <div
               style={{
                 width: `${(isEraser ? lineWidth * 2.5 : lineWidth) + 6}px`,
@@ -291,8 +330,11 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandle, DrawingCanvasProps>
               }}
             />
           </div>
-        ) : null}
-      </div>
+        </div>
     );
   },
 );
+
+DrawingCanvasInner.displayName = 'DrawingCanvas';
+
+export const DrawingCanvas = memo(DrawingCanvasInner);

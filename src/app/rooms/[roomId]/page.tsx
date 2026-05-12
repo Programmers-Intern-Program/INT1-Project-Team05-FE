@@ -2353,6 +2353,8 @@ function GameBoard({
   const [lineWidth, setLineWidth] = useState(8);
   const [chatInput, setChatInput] = useState('');
   const chatScrollRef = useRef<HTMLDivElement>(null);
+  /** SSR·하이드레이션 첫 페인트와 DOM을 맞추기 위해 클라이언트 마운트 후에만 body 포털을 연다. */
+  const [chatPortalMounted, setChatPortalMounted] = useState(false);
   const [submitConfirmOpen, setSubmitConfirmOpen] = useState(false);
   const submitConfirmLockRef = useRef(false);
   const lastTimeOverSignalRef = useRef(0);
@@ -2364,6 +2366,10 @@ function GameBoard({
   useEffect(() => {
     canvasRef.current?.clear();
   }, [activeRoundId]);
+
+  useEffect(() => {
+    setChatPortalMounted(true);
+  }, []);
 
   useEffect(() => {
     const node = chatScrollRef.current;
@@ -2516,7 +2522,7 @@ function GameBoard({
           loadingSubmit={loadingSubmit}
           interactionLocked={loadingSubmit}
         />
-        {typeof window !== 'undefined'
+        {chatPortalMounted
           ? createPortal(
               <div
                 className="pointer-events-none"
