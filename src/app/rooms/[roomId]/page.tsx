@@ -9,6 +9,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { createPortal } from "react-dom";
 import type { DrawingCanvasHandle } from "@/components/DrawingCanvas";
@@ -17,6 +18,20 @@ import { ProfileImage } from "@/components/ProfileImage";
 import { useRoomStomp, type RoomStompDestination } from "@/hooks/useRoomStomp";
 import { apiFetch, getHttpStatus } from "@/lib/api-client";
 import { clearAuthSession, isUnauthorizedStatus } from "@/lib/auth-session";
+
+/** `GET /api/friendship` — 방 초대 후보 목록 */
+type FriendListItemForInvite = {
+  id: number;
+  nickname: string;
+  profileImageUrl: string | null;
+};
+
+/** STOMP `/sub/users/{id}/notifications` — `RoomInviteResponse` */
+type RoomInviteToastState = {
+  roomId: number;
+  roomTitle: string;
+  inviterNickname: string;
+};
 
 type Player = {
   id: number;
@@ -820,6 +835,17 @@ export default function RoomDetailPage() {
     answer: string;
     points: number;
   } | null>(null);
+  const [friendInviteOpen, setFriendInviteOpen] = useState(false);
+  const [friendInviteLoading, setFriendInviteLoading] = useState(false);
+  const [friendInviteList, setFriendInviteList] = useState<
+    FriendListItemForInvite[]
+  >([]);
+  const [friendInviteSendingId, setFriendInviteSendingId] = useState<
+    number | null
+  >(null);
+  const [roomInviteToast, setRoomInviteToast] = useState<RoomInviteToastState | null>(
+    null,
+  );
   const myAiRoundSubmitByRoundIdRef = useRef<
     Map<number, { points: number; answer: string }>
   >(new Map());
@@ -1165,6 +1191,28 @@ export default function RoomDetailPage() {
 
   const onStompPayload = useCallback(
     (dest: RoomStompDestination, body: unknown) => {
+      if (dest === "notify") {
+        if (body && typeof body === "object") {
+          const o = body as Record<string, unknown>;
+          const rid = Number(o.roomId);
+          const roomTitle =
+            typeof o.roomTitle === "string" && o.roomTitle.trim()
+              ? o.roomTitle.trim()
+              : "방";
+          const inviterNickname =
+            typeof o.hostNickname === "string" && o.hostNickname.trim()
+              ? o.hostNickname.trim()
+              : "친구";
+          if (Number.isFinite(rid) && rid > 0) {
+            setRoomInviteToast({
+              roomId: rid,
+              roomTitle,
+              inviterNickname,
+            });
+          }
+        }
+        return;
+      }
       if (dest === "ranking") {
         const list = Array.isArray(body) ? body : [];
         const rows = list
@@ -1353,11 +1401,16 @@ export default function RoomDetailPage() {
 
   const stompToken =
     typeof window !== "undefined" ? localStorage.getItem("accessToken") : null;
+  const stompNotifyUserId = useMemo(
+    () => getJwtUserId(stompToken),
+    [stompToken],
+  );
   const { connected: chatConnected, publishChat } = useRoomStomp(
     roomIdNumber,
     Boolean(roomIdNumber && stompToken),
     stompToken,
     onStompPayload,
+    stompNotifyUserId,
   );
 
   // STOMP 메시지를 순간적으로 놓친 탭(시크릿/백그라운드)도 주기적으로 현재 상태를 따라잡는다.
@@ -1948,8 +2001,94 @@ export default function RoomDetailPage() {
     }
   }
 
+  const openFriendInviteModal = useCallback(async () => {
+    setFriendInviteOpen(true);
+    setFriendInviteLoading(true);
+    setFriendInviteList([]);
+    setError("");
+    try {
+      const list = await apiFetch<FriendListItemForInvite[]>("/api/friendship", {
+        method: "GET",
+      });
+      setFriendInviteList(Array.isArray(list) ? list : []);
+    } catch {
+      setFriendInviteList([]);
+      setError("친구 목록을 불러오지 못했습니다.");
+    } finally {
+      setFriendInviteLoading(false);
+    }
+  }, []);
+
+  const sendRoomInvite = useCallback(
+    async (friendId: number) => {
+      if (!roomIdNumber) return;
+      setFriendInviteSendingId(friendId);
+      setError("");
+      try {
+        await apiFetch<unknown>(
+          `/api/rooms/${roomIdNumber}/invite/${friendId}`,
+          {
+            method: "POST",
+            body: JSON.stringify({}),
+          },
+        );
+        setFriendInviteOpen(false);
+      } catch (e) {
+        setError(
+          e instanceof Error ? e.message : "초대를 보내지 못했습니다.",
+        );
+      } finally {
+        setFriendInviteSendingId(null);
+      }
+    },
+    [roomIdNumber],
+  );
+
+  const showFriendInviteInHud = Boolean(
+    !isRoomInProgress && stompToken && roomIdNumber && myPlayer,
+  );
+
+  const friendInviteCandidates = useMemo(() => {
+    const inRoom = new Set<number>();
+    for (const p of players) {
+      if (typeof p.userId === "number" && Number.isFinite(p.userId)) {
+        inRoom.add(p.userId);
+      }
+    }
+    return friendInviteList.filter((f) => !inRoom.has(f.id));
+  }, [friendInviteList, players]);
+
   return (
     <main className="relative min-h-[calc(100vh-4rem)] overflow-hidden text-white">
+      {roomInviteToast ? (
+        <div className="pointer-events-none fixed inset-x-0 top-[4.5rem] z-[70] flex justify-center px-4">
+          <div
+            role="status"
+            aria-live="polite"
+            className="pointer-events-auto flex max-w-lg flex-wrap items-center gap-3 rounded-2xl border border-emerald-400/40 bg-slate-900/95 px-4 py-3 text-sm shadow-xl backdrop-blur"
+          >
+            <p className="text-slate-100">
+              <span className="font-bold text-emerald-200">
+                {roomInviteToast.inviterNickname}
+              </span>
+              님이 「{roomInviteToast.roomTitle}」에 초대했습니다.
+            </p>
+            <Link
+              href={`/rooms/${roomInviteToast.roomId}`}
+              className="rounded-lg bg-emerald-500/20 px-3 py-1.5 font-bold text-emerald-100 ring-1 ring-emerald-400/40 transition hover:bg-emerald-500/30"
+            >
+              방으로 가기
+            </Link>
+            <button
+              type="button"
+              onClick={() => setRoomInviteToast(null)}
+              className="rounded-lg px-2 py-1 text-xs text-slate-400 transition hover:bg-white/10 hover:text-white"
+            >
+              닫기
+            </button>
+          </div>
+        </div>
+      ) : null}
       {roundEndScoreboard ? (
         <RoundEndScoreboardOverlay
           totalRounds={roomCapacity?.totalRounds ?? undefined}
@@ -2031,6 +2170,8 @@ export default function RoomDetailPage() {
           loadingStart={loadingStart}
           onLeaveRoom={handleLeaveRoom}
           leavingRoom={leavingRoom}
+          showInviteFriends={showFriendInviteInHud}
+          onInviteFriendsClick={() => void openFriendInviteModal()}
         />
 
         {roundAdvanceCountdownSec != null && roundAdvanceCountdownSec > 0 ? (
@@ -2069,6 +2210,74 @@ export default function RoomDetailPage() {
           <PlayerColumn players={rightPlayers} />
         </section>
       </div>
+
+      {friendInviteOpen ? (
+        <div
+          className="fixed inset-0 z-[75] flex items-center justify-center bg-slate-950/75 p-4 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          aria-label="친구 초대"
+          onClick={() => setFriendInviteOpen(false)}
+        >
+          <div
+            className="max-h-[min(85vh,560px)] w-full max-w-md overflow-hidden rounded-2xl border border-white/10 bg-slate-900/95 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-white/10 px-4 py-3 sm:px-5">
+              <h2 className="text-lg font-black text-white">친구 초대</h2>
+              <button
+                type="button"
+                onClick={() => setFriendInviteOpen(false)}
+                className="rounded-full border border-white/15 px-2.5 py-1 text-sm text-slate-300 hover:bg-white/10 hover:text-white"
+              >
+                닫기
+              </button>
+            </div>
+            <div className="max-h-[calc(85vh-8rem)] overflow-y-auto px-4 py-3 sm:px-5">
+              {friendInviteLoading ? (
+                <p className="py-8 text-center text-sm text-slate-400">
+                  친구 목록을 불러오는 중…
+                </p>
+              ) : friendInviteCandidates.length === 0 ? (
+                <p className="py-8 text-center text-sm text-slate-400">
+                  초대할 수 있는 친구가 없습니다. (이미 방에 있거나 친구 목록이
+                  비었습니다.)
+                </p>
+              ) : (
+                <ul className="space-y-2">
+                  {friendInviteCandidates.map((f) => (
+                    <li
+                      key={f.id}
+                      className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2.5"
+                    >
+                      <div className="flex min-w-0 flex-1 items-center gap-2.5">
+                        <ProfileImage
+                          src={f.profileImageUrl}
+                          alt=""
+                          className="h-9 w-9 shrink-0"
+                        />
+                        <span className="truncate font-semibold text-white">
+                          {f.nickname}
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        disabled={friendInviteSendingId === f.id}
+                        onClick={() => void sendRoomInvite(f.id)}
+                        className="shrink-0 rounded-lg bg-gradient-to-r from-blue-500 to-violet-500 px-3 py-1.5 text-xs font-bold text-white shadow-md transition hover:from-blue-400 hover:to-violet-400 disabled:opacity-50"
+                      >
+                        {friendInviteSendingId === f.id
+                          ? "전송 중…"
+                          : "초대"}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
+        </div>
+      ) : null}
     </main>
   );
 }
@@ -2509,6 +2718,8 @@ function TopHud({
   loadingStart,
   onLeaveRoom,
   leavingRoom,
+  showInviteFriends,
+  onInviteFriendsClick,
 }: {
   roomId: string;
   roundLabel: string;
@@ -2526,6 +2737,8 @@ function TopHud({
   loadingStart: boolean;
   onLeaveRoom: () => void | Promise<void>;
   leavingRoom: boolean;
+  showInviteFriends: boolean;
+  onInviteFriendsClick: () => void;
 }) {
   return (
     <header className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 shadow-2xl backdrop-blur sm:rounded-[2rem] sm:px-6 sm:py-4">
@@ -2570,6 +2783,15 @@ function TopHud({
                 : hasAiPlayer
                   ? "AI 제거"
                   : "AI 추가"}
+            </button>
+          ) : null}
+          {showInviteFriends ? (
+            <button
+              type="button"
+              onClick={onInviteFriendsClick}
+              className="rounded-2xl border border-sky-300/35 bg-sky-500/10 px-5 py-3 text-sm font-bold text-sky-100 transition hover:bg-sky-500/20"
+            >
+              친구 초대
             </button>
           ) : null}
           <button
