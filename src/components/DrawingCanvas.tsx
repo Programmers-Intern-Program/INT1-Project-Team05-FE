@@ -31,6 +31,8 @@ type DrawingCanvasProps = {
   isFill: boolean;
   strokeOpacity?: number;
   className?: string;
+  /** 실행 취소/다시 실행 스택이 바뀔 때(툴바 등에서 ref 대신 state로 동기화) */
+  onHistoryChange?: () => void;
 };
 
 const FILL_TOLERANCE_BASE = 26;
@@ -144,7 +146,15 @@ function readPointerCoords(
 
 const DrawingCanvasInner = forwardRef<DrawingCanvasHandle, DrawingCanvasProps>(
   function DrawingCanvas(
-    { strokeColor, lineWidth, isEraser, isFill, strokeOpacity = 1, className },
+    {
+      strokeColor,
+      lineWidth,
+      isEraser,
+      isFill,
+      strokeOpacity = 1,
+      className,
+      onHistoryChange,
+    },
     ref,
   ) {
     const isHighlighter = !isEraser && strokeOpacity < 0.95;
@@ -206,7 +216,8 @@ const DrawingCanvasInner = forwardRef<DrawingCanvasHandle, DrawingCanvasProps>(
       history.push(url);
       if (history.length > 60) history.shift();
       redoRef.current = [];
-    }, [snapshot]);
+      onHistoryChange?.();
+    }, [snapshot, onHistoryChange]);
 
     useEffect(() => {
       const canvas = canvasRef.current;
@@ -223,7 +234,7 @@ const DrawingCanvasInner = forwardRef<DrawingCanvasHandle, DrawingCanvasProps>(
         if (hoverRafRef.current != null)
           cancelAnimationFrame(hoverRafRef.current);
       };
-    }, [fillWhite]);
+    }, [fillWhite, pushHistory]);
 
     const paintStroke = useCallback(
       (from: { x: number; y: number }, to: { x: number; y: number }) => {
@@ -266,37 +277,43 @@ const DrawingCanvasInner = forwardRef<DrawingCanvasHandle, DrawingCanvasProps>(
       [isEraser, lineWidth, strokeColor, strokeOpacity],
     );
 
-    useImperativeHandle(ref, () => ({
-      toDataUrl: () => canvasRef.current?.toDataURL("image/png") ?? "",
-      clear: () => {
-        fillWhite();
-        strokeCount.current = 0;
-        strokeDirty.current = false;
-        historyRef.current = [];
-        redoRef.current = [];
-        pushHistory();
-      },
-      getHasDrawing: () =>
-        strokeCount.current > 0 || historyRef.current.length > 1,
-      undo: () => {
-        const history = historyRef.current;
-        if (history.length <= 1) return;
-        const last = history.pop();
-        if (last) redoRef.current.unshift(last);
-        const prev = history[history.length - 1];
-        if (prev) restoreFromDataUrl(prev);
-        strokeCount.current = history.length <= 1 ? 0 : 1;
-      },
-      redo: () => {
-        const next = redoRef.current.shift();
-        if (!next) return;
-        historyRef.current.push(next);
-        restoreFromDataUrl(next);
-        strokeCount.current = 1;
-      },
-      canUndo: () => historyRef.current.length > 1,
-      canRedo: () => redoRef.current.length > 0,
-    }));
+    useImperativeHandle(
+      ref,
+      () => ({
+        toDataUrl: () => canvasRef.current?.toDataURL("image/png") ?? "",
+        clear: () => {
+          fillWhite();
+          strokeCount.current = 0;
+          strokeDirty.current = false;
+          historyRef.current = [];
+          redoRef.current = [];
+          pushHistory();
+        },
+        getHasDrawing: () =>
+          strokeCount.current > 0 || historyRef.current.length > 1,
+        undo: () => {
+          const history = historyRef.current;
+          if (history.length <= 1) return;
+          const last = history.pop();
+          if (last) redoRef.current.unshift(last);
+          const prev = history[history.length - 1];
+          if (prev) restoreFromDataUrl(prev);
+          strokeCount.current = history.length <= 1 ? 0 : 1;
+          onHistoryChange?.();
+        },
+        redo: () => {
+          const next = redoRef.current.shift();
+          if (!next) return;
+          historyRef.current.push(next);
+          restoreFromDataUrl(next);
+          strokeCount.current = 1;
+          onHistoryChange?.();
+        },
+        canUndo: () => historyRef.current.length > 1,
+        canRedo: () => redoRef.current.length > 0,
+      }),
+      [fillWhite, pushHistory, restoreFromDataUrl, onHistoryChange],
+    );
 
     const applyCursorTransform = useCallback((x: number, y: number) => {
       const el = cursorWrapRef.current;

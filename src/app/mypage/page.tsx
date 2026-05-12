@@ -60,7 +60,9 @@ export default function MyPage() {
   }
 
   useEffect(() => {
-    void loadMyInfo();
+    queueMicrotask(() => {
+      void loadMyInfo();
+    });
   }, []);
 
   async function handleSaveProfile() {

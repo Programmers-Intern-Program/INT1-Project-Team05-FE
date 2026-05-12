@@ -1048,7 +1048,9 @@ export default function RoomDetailPage() {
     const inProgress =
       roundInfo?.status === "IN_PROGRESS" && !submitInfo?.gameFinished;
     if (!inProgress || !roundInfo?.roundId) {
-      setRoundRemainingSec(null);
+      queueMicrotask(() => {
+        setRoundRemainingSec(null);
+      });
       return;
     }
 
@@ -1084,13 +1086,15 @@ export default function RoomDetailPage() {
     const roundNumber = roundInfo?.roundNumber ?? 0;
     const gameFinished = Boolean(submitInfo.gameFinished);
 
-    setRoundEndScoreboard({
-      closedRoundId: rid,
-      keyword,
-      roundNumber,
-      gameFinished,
-      items: [],
-      loading: true,
+    queueMicrotask(() => {
+      setRoundEndScoreboard({
+        closedRoundId: rid,
+        keyword,
+        roundNumber,
+        gameFinished,
+        items: [],
+        loading: true,
+      });
     });
 
     let cancelled = false;
@@ -1153,7 +1157,9 @@ export default function RoomDetailPage() {
     if (!roundEndScoreboard) return;
     const cur = roundInfo?.roundId;
     if (cur != null && cur !== roundEndScoreboard.closedRoundId) {
-      setRoundEndScoreboard(null);
+      queueMicrotask(() => {
+        setRoundEndScoreboard(null);
+      });
     }
   }, [roundInfo?.roundId, roundEndScoreboard]);
 
@@ -1373,7 +1379,11 @@ export default function RoomDetailPage() {
     const enterSeq = ++roomEnterSeqRef.current;
     let cancelled = false;
 
-    setRoundEndScoreboard(null);
+    queueMicrotask(() => {
+      setRoundEndScoreboard(null);
+      setRoundAdvanceCountdownSec(null);
+      setFinalRankingBoard(null);
+    });
     if (roundAdvanceSyncTimerRef.current) {
       clearTimeout(roundAdvanceSyncTimerRef.current);
       roundAdvanceSyncTimerRef.current = null;
@@ -1383,8 +1393,6 @@ export default function RoomDetailPage() {
       roundAdvanceCountdownIntervalRef.current = null;
     }
     roundAdvanceEndsAtRef.current = null;
-    setRoundAdvanceCountdownSec(null);
-    setFinalRankingBoard(null);
 
     const isStale = () => cancelled || enterSeq !== roomEnterSeqRef.current;
 
@@ -1578,7 +1586,9 @@ export default function RoomDetailPage() {
 
   useEffect(() => {
     if (!isRoomInProgress) {
-      setMyPreviousRoundAiPanel(null);
+      queueMicrotask(() => {
+        setMyPreviousRoundAiPanel(null);
+      });
       myAiRoundSubmitByRoundIdRef.current.clear();
       lastSeenRoundIdForScoreRef.current = null;
       return;
@@ -1589,19 +1599,27 @@ export default function RoomDetailPage() {
     if (prev != null && prev !== cur) {
       const row = myAiRoundSubmitByRoundIdRef.current.get(prev);
       if (row && Number.isFinite(row.points)) {
-        setMyPreviousRoundAiPanel({
-          points: row.points,
-          answer: row.answer.trim() || "—",
+        queueMicrotask(() => {
+          setMyPreviousRoundAiPanel({
+            points: row.points,
+            answer: row.answer.trim() || "—",
+          });
         });
       } else {
-        setMyPreviousRoundAiPanel(null);
+        queueMicrotask(() => {
+          setMyPreviousRoundAiPanel(null);
+        });
       }
     }
     lastSeenRoundIdForScoreRef.current = cur;
   }, [isRoomInProgress, roundInfo?.roundId, roundInfo?.status]);
 
   useEffect(() => {
-    if (!isRoomInProgress) setLiveRankingRows([]);
+    if (!isRoomInProgress) {
+      queueMicrotask(() => {
+        setLiveRankingRows([]);
+      });
+    }
   }, [isRoomInProgress]);
 
   useEffect(() => {
@@ -2735,6 +2753,13 @@ function GameBoard({
   const [submitConfirmOpen, setSubmitConfirmOpen] = useState(false);
   const submitConfirmLockRef = useRef(false);
   const lastTimeOverSignalRef = useRef(0);
+  const [canUndo, setCanUndo] = useState(false);
+  const [canRedo, setCanRedo] = useState(false);
+  const syncCanvasHistory = useCallback(() => {
+    const api = canvasRef.current;
+    setCanUndo(Boolean(api?.canUndo()));
+    setCanRedo(Boolean(api?.canRedo()));
+  }, []);
   const isFill = brush === "fill";
   const isEraser = brush === "eraser";
   const isHighlighter = brush === "highlighter";
@@ -2745,10 +2770,15 @@ function GameBoard({
 
   useEffect(() => {
     canvasRef.current?.clear();
-  }, [activeRoundId]);
+    queueMicrotask(() => {
+      syncCanvasHistory();
+    });
+  }, [activeRoundId, syncCanvasHistory]);
 
   useEffect(() => {
-    setChatPortalMounted(true);
+    queueMicrotask(() => {
+      setChatPortalMounted(true);
+    });
   }, []);
 
   useEffect(() => {
@@ -2895,6 +2925,7 @@ function GameBoard({
               isEraser={isEraser}
               isFill={isFill}
               strokeOpacity={effectiveOpacity}
+              onHistoryChange={syncCanvasHistory}
             />
           </div>
         </div>
@@ -2909,8 +2940,8 @@ function GameBoard({
           onClear={handleClearCanvas}
           onUndo={() => canvasRef.current?.undo()}
           onRedo={() => canvasRef.current?.redo()}
-          canUndo={Boolean(canvasRef.current?.canUndo())}
-          canRedo={Boolean(canvasRef.current?.canRedo())}
+          canUndo={canUndo}
+          canRedo={canRedo}
           onSubmit={handleSubmitClick}
           loadingSubmit={loadingSubmit}
           interactionLocked={loadingSubmit}

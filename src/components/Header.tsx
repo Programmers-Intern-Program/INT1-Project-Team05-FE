@@ -32,10 +32,7 @@ export default function Header() {
   }, []);
 
   useEffect(() => {
-    if (!isLoggedIn) {
-      setReceivedRequestCount(0);
-      return;
-    }
+    if (!isLoggedIn) return;
 
     const loadReceivedCount = async () => {
       const token = localStorage.getItem("accessToken");

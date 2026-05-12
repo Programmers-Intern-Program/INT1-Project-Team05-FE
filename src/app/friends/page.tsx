@@ -44,7 +44,24 @@ const AUTH_REDIRECT = Symbol("AUTH_REDIRECT");
 export default function FriendsPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const [activeTab, setActiveTab] = useState<FriendsTab>("search");
+  const tabParam = searchParams.get("tab");
+  const activeTab: FriendsTab = useMemo(() => {
+    if (
+      tabParam === "search" ||
+      tabParam === "received" ||
+      tabParam === "sent" ||
+      tabParam === "friends"
+    ) {
+      return tabParam;
+    }
+    return "search";
+  }, [tabParam]);
+
+  function goToFriendsTab(next: FriendsTab) {
+    const sp = new URLSearchParams(searchParams.toString());
+    sp.set("tab", next);
+    router.replace(`/friends?${sp.toString()}`, { scroll: false });
+  }
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
@@ -114,18 +131,6 @@ export default function FriendsPage() {
       throw e;
     }
   }
-
-  useEffect(() => {
-    const tab = searchParams.get("tab");
-    if (
-      tab === "search" ||
-      tab === "received" ||
-      tab === "sent" ||
-      tab === "friends"
-    ) {
-      setActiveTab(tab);
-    }
-  }, [searchParams]);
 
   async function loadReceived() {
     const data = await withAuth(() =>
@@ -475,7 +480,7 @@ export default function FriendsPage() {
             <button
               key={id}
               type="button"
-              onClick={() => setActiveTab(id)}
+              onClick={() => goToFriendsTab(id)}
               className={`relative rounded-xl px-4 py-2 text-sm font-bold transition ${
                 activeTab === id
                   ? "bg-gradient-to-r from-blue-500 to-violet-500 text-white"
@@ -758,7 +763,7 @@ export default function FriendsPage() {
             void handleDeleteFriend(selectedUser.id, selectedUser.nickname)
           }
           onMoveToReceivedTab={() => {
-            setActiveTab("received");
+            goToFriendsTab("received");
             setSelectedUser(null);
           }}
         />

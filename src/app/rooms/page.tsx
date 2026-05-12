@@ -101,7 +101,9 @@ export default function RoomsPage() {
       }
     }
 
-    setGhostSuppressedIds(nextSuppressed);
+    queueMicrotask(() => {
+      setGhostSuppressedIds(nextSuppressed);
+    });
   }, [rooms]);
 
   useEffect(() => {
