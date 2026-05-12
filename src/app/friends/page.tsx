@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { ProfileImage } from "@/components/ProfileImage";
 import { apiFetch, getHttpStatus } from "@/lib/api-client";
@@ -41,7 +41,7 @@ type ActionDone = "none" | "done";
 
 const AUTH_REDIRECT = Symbol("AUTH_REDIRECT");
 
-export default function FriendsPage() {
+function FriendsPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const tabParam = searchParams.get("tab");
@@ -769,6 +769,22 @@ export default function FriendsPage() {
         />
       ) : null}
     </main>
+  );
+}
+
+export default function FriendsPage() {
+  return (
+    <Suspense
+      fallback={
+        <main className="relative min-h-[calc(100vh-4rem)] overflow-hidden text-white">
+          <div className="relative mx-auto max-w-5xl px-6 py-12">
+            <p className="text-slate-400">불러오는 중…</p>
+          </div>
+        </main>
+      }
+    >
+      <FriendsPageContent />
+    </Suspense>
   );
 }
 
