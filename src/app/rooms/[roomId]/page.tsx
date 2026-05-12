@@ -188,7 +188,21 @@ type ChatMessageDtoWs = {
   roomId?: number;
   sender?: string;
   message?: string;
+  moderationPhase?: string;
+  moderationTraceId?: string;
 };
+
+/** STOMP `ChatModerationPhase` — 사용자 채팅 검열 단계 표시 */
+type ChatModerationPhaseUi = "FAST" | "AI";
+
+function parseWsModerationPhase(v: unknown): ChatModerationPhaseUi | null {
+  if (v === "FAST" || v === "AI") return v;
+  return null;
+}
+
+function isAiModerationBlockedMessage(message: string): boolean {
+  return message.includes("[AI 검열에 의해 삭제");
+}
 
 /** 방 채팅 패널(로그) 한 줄 — 백엔드가 TALK를 연속 브로드캐스트(빠른 필터 → AI 검열)할 수 있음 */
 type RoomChatLogEntry = {
@@ -197,9 +211,28 @@ type RoomChatLogEntry = {
   kind: "TALK" | "NOTICE";
   sender: string;
   message: string;
+  moderationPhase?: ChatModerationPhaseUi;
+  moderationTraceId?: string;
+};
+
+type PendingOptimisticChat = {
+  optimisticId: string;
+  traceId: string;
 };
 
 const MAX_ROOM_CHAT_MESSAGES = 200;
+
+function RoomChatModerationBadge({ row }: { row: RoomChatLogEntry }) {
+  if (row.kind !== "TALK") return null;
+  const aiBlocked =
+    row.moderationPhase === "AI" || isAiModerationBlockedMessage(row.message);
+  if (!aiBlocked) return null;
+  return (
+    <span className="ml-3 shrink-0 rounded-md bg-rose-500/20 px-1.5 py-0.5 text-[10px] font-semibold text-rose-100/95 ring-1 ring-rose-400/35">
+      AI 검열
+    </span>
+  );
+}
 
 /** GET /api/rounds/{roundId}/submissions — 종료 라운드 점수판·그림 */
 type RoundSubmissionItem = {
@@ -825,7 +858,7 @@ export default function RoomDetailPage() {
   >(new Map());
   const lastSeenRoundIdForScoreRef = useRef<number | null>(null);
   /** 내가 연속으로 보낸 낙관적 채팅 줄 id — STOMP 에코가 보낸 순서(FIFO)로 하나씩 제거·교체 */
-  const pendingOptimisticChatQueueRef = useRef<string[]>([]);
+  const pendingOptimisticChatQueueRef = useRef<PendingOptimisticChat[]>([]);
 
   const roundAdvanceSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
     null,
@@ -860,6 +893,12 @@ export default function RoomDetailPage() {
         kind: entry.kind,
         sender: entry.sender,
         message: entry.message,
+        ...(entry.moderationPhase != null
+          ? { moderationPhase: entry.moderationPhase }
+          : {}),
+        ...(entry.moderationTraceId
+          ? { moderationTraceId: entry.moderationTraceId }
+          : {}),
       };
       setRoomChatMessages((prev) => {
         const next = [...prev, row];
@@ -1187,31 +1226,152 @@ export default function RoomDetailPage() {
           appendRoomChatEntry({ kind: "NOTICE", sender: label, message: msg });
         } else {
           const senderNorm = (sender || "익명").trim();
-          const myUid = getJwtUserId(
-            typeof window !== "undefined"
-              ? localStorage.getItem("accessToken")
-              : null,
-          );
-          const me =
-            myUid != null
-              ? playersRef.current.find((p) => p.userId === myUid)
-              : undefined;
-          const myNick = (me?.nickname ?? "").trim();
+          const traceId =
+            typeof c.moderationTraceId === "string"
+              ? c.moderationTraceId.trim()
+              : "";
+          const modPhase = parseWsModerationPhase(c.moderationPhase);
+
+          if (modPhase === "AI" && traceId) {
+            setRoomChatMessages((prev) => {
+              const idx = prev.findIndex(
+                (r) =>
+                  r.kind === "TALK" && r.moderationTraceId === traceId,
+              );
+              if (idx >= 0) {
+                const next = [...prev];
+                const old = next[idx]!;
+                next[idx] = {
+                  ...old,
+                  message: msg,
+                  moderationPhase: "AI",
+                };
+                return next;
+              }
+              const at = Date.now();
+              const id = `chat-${at}-${Math.random().toString(36).slice(2, 10)}`;
+              const orphan: RoomChatLogEntry = {
+                id,
+                at,
+                kind: "TALK",
+                sender: senderNorm,
+                message: msg,
+                moderationPhase: "AI",
+                moderationTraceId: traceId,
+              };
+              const nxt = [...prev, orphan];
+              return nxt.length > MAX_ROOM_CHAT_MESSAGES
+                ? nxt.slice(-MAX_ROOM_CHAT_MESSAGES)
+                : nxt;
+            });
+            return;
+          }
+
+          /** 서버에 trace가 없을 때: 최근 120s 안 동일 발신자의 비-AI 줄이 정확히 1개일 때만 덮어쓴다.
+           *  (개새·안녕처럼 연속 두 줄이면 어느 줄용 AI인지 알 수 없어 덮어쓰지 않음 → 안녕이 검열되는 버그 방지) */
+          if (isAiModerationBlockedMessage(msg)) {
+            setRoomChatMessages((prev) => {
+              const last = prev[prev.length - 1];
+              if (
+                last &&
+                last.kind === "TALK" &&
+                last.sender === senderNorm &&
+                last.message === msg
+              ) {
+                return prev;
+              }
+              const now = Date.now();
+              const windowMs = 120_000;
+              const candidateIdx: number[] = [];
+              for (let i = 0; i < prev.length; i++) {
+                const r = prev[i]!;
+                if (r.kind !== "TALK" || r.sender !== senderNorm) continue;
+                if (isAiModerationBlockedMessage(r.message)) continue;
+                if (now - r.at > windowMs) continue;
+                candidateIdx.push(i);
+              }
+              if (candidateIdx.length === 1) {
+                const i = candidateIdx[0]!;
+                const r = prev[i]!;
+                const next = [...prev];
+                next[i] = {
+                  ...r,
+                  message: msg,
+                  moderationPhase: "AI",
+                };
+                return next.length > MAX_ROOM_CHAT_MESSAGES
+                  ? next.slice(-MAX_ROOM_CHAT_MESSAGES)
+                  : next;
+              }
+              const at = Date.now();
+              const id = `chat-${at}-${Math.random().toString(36).slice(2, 10)}`;
+              const orphan: RoomChatLogEntry = {
+                id,
+                at,
+                kind: "TALK",
+                sender: senderNorm,
+                message: msg,
+                moderationPhase: "AI",
+              };
+              const nxt = [...prev, orphan];
+              return nxt.length > MAX_ROOM_CHAT_MESSAGES
+                ? nxt.slice(-MAX_ROOM_CHAT_MESSAGES)
+                : nxt;
+            });
+            return;
+          }
+
           const q = pendingOptimisticChatQueueRef.current;
-          if (myNick && senderNorm === myNick && q.length > 0) {
-            const pendingId = q[0]!;
-            pendingOptimisticChatQueueRef.current = q.slice(1);
+          const pendingByTraceIdx =
+            traceId.length > 0
+              ? q.findIndex((item) => item.traceId === traceId)
+              : -1;
+          if (pendingByTraceIdx >= 0) {
+            const pending = q[pendingByTraceIdx]!;
+            pendingOptimisticChatQueueRef.current = q.filter(
+              (_, idx) => idx !== pendingByTraceIdx,
+            );
             const at = Date.now();
             const id = `chat-${at}-${Math.random().toString(36).slice(2, 10)}`;
+            const effectiveTraceId = traceId || pending.traceId;
             const row: RoomChatLogEntry = {
               id,
               at,
               kind: "TALK",
               sender: senderNorm,
               message: msg,
+              ...(modPhase != null ? { moderationPhase: modPhase } : {}),
+              ...(effectiveTraceId
+                ? { moderationTraceId: effectiveTraceId }
+                : {}),
             };
             setRoomChatMessages((prev) => {
-              const cut = prev.filter((r) => r.id !== pendingId);
+              const cut = prev.filter((r) => r.id !== pending.optimisticId);
+              const next = [...cut, row];
+              return next.length > MAX_ROOM_CHAT_MESSAGES
+                ? next.slice(-MAX_ROOM_CHAT_MESSAGES)
+                : next;
+            });
+          } else if (q.length > 0 && modPhase !== "AI") {
+            // 구버전 백엔드(traceId 미포함) 호환: 내 최신 낙관적 줄 1개를 에코로 대체
+            const pending = q[0]!;
+            pendingOptimisticChatQueueRef.current = q.slice(1);
+            const at = Date.now();
+            const id = `chat-${at}-${Math.random().toString(36).slice(2, 10)}`;
+            const effectiveTraceId = traceId || pending.traceId;
+            const row: RoomChatLogEntry = {
+              id,
+              at,
+              kind: "TALK",
+              sender: senderNorm,
+              message: msg,
+              ...(modPhase != null ? { moderationPhase: modPhase } : {}),
+              ...(effectiveTraceId
+                ? { moderationTraceId: effectiveTraceId }
+                : {}),
+            };
+            setRoomChatMessages((prev) => {
+              const cut = prev.filter((r) => r.id !== pending.optimisticId);
               const next = [...cut, row];
               return next.length > MAX_ROOM_CHAT_MESSAGES
                 ? next.slice(-MAX_ROOM_CHAT_MESSAGES)
@@ -1222,6 +1382,8 @@ export default function RoomDetailPage() {
               kind: "TALK",
               sender: senderNorm,
               message: msg,
+              ...(modPhase != null ? { moderationPhase: modPhase } : {}),
+              ...(traceId ? { moderationTraceId: traceId } : {}),
             });
           }
         }
@@ -1927,21 +2089,23 @@ export default function RoomDetailPage() {
     if (!trimmed) return;
     const myNick = myPlayer?.nickname?.trim() || "나";
     const optimisticId = `opt-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    const traceId = `trace-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
     pendingOptimisticChatQueueRef.current = [
       ...pendingOptimisticChatQueueRef.current,
-      optimisticId,
+      { optimisticId, traceId },
     ];
     appendRoomChatEntry({
       kind: "TALK",
       sender: myNick,
       message: trimmed,
       id: optimisticId,
+      moderationTraceId: traceId,
     });
-    const ok = publishChat(trimmed);
+    const ok = publishChat(trimmed, traceId);
     if (!ok) {
       pendingOptimisticChatQueueRef.current =
         pendingOptimisticChatQueueRef.current.filter(
-          (id) => id !== optimisticId,
+          (item) => item.optimisticId !== optimisticId,
         );
       setRoomChatMessages((prev) => prev.filter((r) => r.id !== optimisticId));
       setError("채팅 서버 연결이 불안정합니다. 잠시 후 다시 시도해 주세요.");
@@ -3140,9 +3304,7 @@ function GameBoard({
                           );
                           const moderated =
                             row.kind === "TALK" &&
-                            (row.message.includes("[AI 검열") ||
-                              row.message.includes("[부적절") ||
-                              row.message === "****");
+                            isAiModerationBlockedMessage(row.message);
                           if (row.kind === "NOTICE") {
                             return (
                               <div
@@ -3164,24 +3326,27 @@ function GameBoard({
                           return (
                             <div
                               key={row.id}
-                              className="rounded-lg px-2 py-1 leading-snug hover:bg-white/[0.04]"
+                              className="flex items-center gap-2 rounded-lg px-2 py-1 leading-snug hover:bg-white/[0.04]"
                             >
-                              <span className="font-mono text-[10px] text-slate-500">
-                                {timeStr}
-                              </span>{" "}
-                              <span className="font-bold text-violet-200">
-                                {row.sender}
-                              </span>
-                              <span className="text-slate-400">: </span>
-                              <span
-                                className={
-                                  moderated
-                                    ? "text-amber-100/95"
-                                    : "text-slate-100"
-                                }
-                              >
-                                {row.message}
-                              </span>
+                              <div className="min-w-0 flex-1">
+                                <span className="font-mono text-[10px] text-slate-500">
+                                  {timeStr}
+                                </span>{" "}
+                                <span className="font-bold text-violet-200">
+                                  {row.sender}
+                                </span>
+                                <span className="text-slate-400">: </span>
+                                <span
+                                  className={
+                                    moderated
+                                      ? "text-amber-100/95"
+                                      : "text-slate-100"
+                                  }
+                                >
+                                  {row.message}
+                                </span>
+                              </div>
+                              <RoomChatModerationBadge row={row} />
                             </div>
                           );
                         })
@@ -3227,7 +3392,7 @@ function GameBoard({
         <ConfirmModal
           title="그림 제출"
           description="정말 제출할까요? 제출 후에는 수정할 수 없습니다."
-          confirmLabel={loadingSubmit ? "제출 중…" : "제출하기"}
+          confirmLabel={loadingSubmit ? "AI 판별 중…" : "제출하기"}
           cancelLabel="취소"
           busy={loadingSubmit}
           disabled={loadingSubmit}
@@ -3268,7 +3433,7 @@ function DrawingToolbar({
   canRedo: boolean;
   onSubmit: () => void;
   loadingSubmit: boolean;
-  /** 제출 중 도구 조작 비활성화(자동 제출 등 모달 없이 진행될 때) */
+  /** 제출·AI 판별 대기 중 도구 조작 비활성화(자동 제출 등 모달 없이 진행될 때) */
   interactionLocked: boolean;
 }) {
   const [openHelp, setOpenHelp] = useState<null | "undo" | "redo">(null);
@@ -3494,7 +3659,7 @@ function DrawingToolbar({
                   className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-white/35 border-t-white"
                   aria-hidden
                 />
-                제출 중…
+                AI 판별 중…
               </span>
             ) : (
               "그림 제출"

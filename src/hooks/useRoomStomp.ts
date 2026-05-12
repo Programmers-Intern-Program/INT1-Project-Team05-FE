@@ -116,13 +116,16 @@ export function useRoomStomp(
   }, [roomId, enabled, token, notifyUserId]);
 
   const publishChat = useCallback(
-    (message: string) => {
+    (message: string, moderationTraceId?: string) => {
       const client = clientRef.current;
       const trimmed = message.trim();
       if (!client || !connected || !trimmed) return false;
       client.publish({
         destination: `/pub/rooms/${roomId}/chat`,
-        body: JSON.stringify({ message: trimmed }),
+        body: JSON.stringify({
+          message: trimmed,
+          ...(moderationTraceId ? { moderationTraceId } : {}),
+        }),
       });
       return true;
     },
