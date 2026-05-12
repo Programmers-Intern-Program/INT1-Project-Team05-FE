@@ -17,20 +17,17 @@ import { DrawingCanvas } from "@/components/DrawingCanvas";
 import { ProfileImage } from "@/components/ProfileImage";
 import { useRoomStomp, type RoomStompDestination } from "@/hooks/useRoomStomp";
 import { apiFetch, getHttpStatus } from "@/lib/api-client";
-import { clearAuthSession, isUnauthorizedStatus } from "@/lib/auth-session";
+import {
+  clearAuthSession,
+  getJwtUserId,
+  isUnauthorizedStatus,
+} from "@/lib/auth-session";
 
 /** `GET /api/friendship` — 방 초대 후보 목록 */
 type FriendListItemForInvite = {
   id: number;
   nickname: string;
   profileImageUrl: string | null;
-};
-
-/** STOMP `/sub/users/{id}/notifications` — `RoomInviteResponse` */
-type RoomInviteToastState = {
-  roomId: number;
-  roomTitle: string;
-  inviterNickname: string;
 };
 
 type Player = {
@@ -668,26 +665,6 @@ function mergePlayersKeepSubmitted(prev: Player[], mapped: Player[]): Player[] {
   });
 }
 
-function getJwtUserId(token: string | null): number | null {
-  if (!token) return null;
-  try {
-    const parts = token.split(".");
-    if (parts.length < 2) return null;
-    const payloadPart = parts[1]!;
-    const base64 = payloadPart.replace(/-/g, "+").replace(/_/g, "/");
-    const padded = base64 + "=".repeat((4 - (base64.length % 4)) % 4);
-    const decoded = atob(padded);
-    const payload = JSON.parse(decoded) as {
-      userId?: number;
-      user_id?: number;
-    };
-    const id = payload.userId ?? payload.user_id;
-    return typeof id === "number" ? id : id != null ? Number(id) : null;
-  } catch {
-    return null;
-  }
-}
-
 /** 라운드 종료 직후 결과를 볼 시간을 준 뒤 다음 라운드(또는 로비)로 동기화 */
 const ROUND_ADVANCE_SYNC_DELAY_MS = 10_000;
 /** 서버 RoundService.ROUND_TIME_LIMIT 과 동일 — API 에 timeLimit 이 없을 때만 */
@@ -843,9 +820,6 @@ export default function RoomDetailPage() {
   const [friendInviteSendingId, setFriendInviteSendingId] = useState<
     number | null
   >(null);
-  const [roomInviteToast, setRoomInviteToast] = useState<RoomInviteToastState | null>(
-    null,
-  );
   const myAiRoundSubmitByRoundIdRef = useRef<
     Map<number, { points: number; answer: string }>
   >(new Map());
@@ -1191,28 +1165,6 @@ export default function RoomDetailPage() {
 
   const onStompPayload = useCallback(
     (dest: RoomStompDestination, body: unknown) => {
-      if (dest === "notify") {
-        if (body && typeof body === "object") {
-          const o = body as Record<string, unknown>;
-          const rid = Number(o.roomId);
-          const roomTitle =
-            typeof o.roomTitle === "string" && o.roomTitle.trim()
-              ? o.roomTitle.trim()
-              : "방";
-          const inviterNickname =
-            typeof o.hostNickname === "string" && o.hostNickname.trim()
-              ? o.hostNickname.trim()
-              : "친구";
-          if (Number.isFinite(rid) && rid > 0) {
-            setRoomInviteToast({
-              roomId: rid,
-              roomTitle,
-              inviterNickname,
-            });
-          }
-        }
-        return;
-      }
       if (dest === "ranking") {
         const list = Array.isArray(body) ? body : [];
         const rows = list
@@ -1401,16 +1353,11 @@ export default function RoomDetailPage() {
 
   const stompToken =
     typeof window !== "undefined" ? localStorage.getItem("accessToken") : null;
-  const stompNotifyUserId = useMemo(
-    () => getJwtUserId(stompToken),
-    [stompToken],
-  );
   const { connected: chatConnected, publishChat } = useRoomStomp(
     roomIdNumber,
     Boolean(roomIdNumber && stompToken),
     stompToken,
     onStompPayload,
-    stompNotifyUserId,
   );
 
   // STOMP 메시지를 순간적으로 놓친 탭(시크릿/백그라운드)도 주기적으로 현재 상태를 따라잡는다.
@@ -2060,35 +2007,6 @@ export default function RoomDetailPage() {
 
   return (
     <main className="relative min-h-[calc(100vh-4rem)] overflow-hidden text-white">
-      {roomInviteToast ? (
-        <div className="pointer-events-none fixed inset-x-0 top-[4.5rem] z-[70] flex justify-center px-4">
-          <div
-            role="status"
-            aria-live="polite"
-            className="pointer-events-auto flex max-w-lg flex-wrap items-center gap-3 rounded-2xl border border-emerald-400/40 bg-slate-900/95 px-4 py-3 text-sm shadow-xl backdrop-blur"
-          >
-            <p className="text-slate-100">
-              <span className="font-bold text-emerald-200">
-                {roomInviteToast.inviterNickname}
-              </span>
-              님이 「{roomInviteToast.roomTitle}」에 초대했습니다.
-            </p>
-            <Link
-              href={`/rooms/${roomInviteToast.roomId}`}
-              className="rounded-lg bg-emerald-500/20 px-3 py-1.5 font-bold text-emerald-100 ring-1 ring-emerald-400/40 transition hover:bg-emerald-500/30"
-            >
-              방으로 가기
-            </Link>
-            <button
-              type="button"
-              onClick={() => setRoomInviteToast(null)}
-              className="rounded-lg px-2 py-1 text-xs text-slate-400 transition hover:bg-white/10 hover:text-white"
-            >
-              닫기
-            </button>
-          </div>
-        </div>
-      ) : null}
       {roundEndScoreboard ? (
         <RoundEndScoreboardOverlay
           totalRounds={roomCapacity?.totalRounds ?? undefined}
@@ -2240,8 +2158,9 @@ export default function RoomDetailPage() {
                 </p>
               ) : friendInviteCandidates.length === 0 ? (
                 <p className="py-8 text-center text-sm text-slate-400">
-                  초대할 수 있는 친구가 없습니다. (이미 방에 있거나 친구 목록이
-                  비었습니다.)
+                  초대할 수 있는 친구가 없습니다.
+                  <br />
+                  (이미 방에 있거나 친구 목록이 비었습니다.)
                 </p>
               ) : (
                 <ul className="space-y-2">
