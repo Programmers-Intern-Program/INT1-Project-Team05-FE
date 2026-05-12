@@ -1,10 +1,10 @@
-'use client';
+"use client";
 
-import { useEffect, useMemo, useState } from 'react';
-import { useRouter, useSearchParams } from 'next/navigation';
-import { ProfileImage } from '@/components/ProfileImage';
-import { apiFetch, getHttpStatus } from '@/lib/api-client';
-import { clearAuthSession, isUnauthorizedStatus } from '@/lib/auth-session';
+import { useEffect, useMemo, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { ProfileImage } from "@/components/ProfileImage";
+import { apiFetch, getHttpStatus } from "@/lib/api-client";
+import { clearAuthSession, isUnauthorizedStatus } from "@/lib/auth-session";
 
 type UserSearchResponse = {
   id: number;
@@ -35,34 +35,50 @@ type FriendInfoResponse = {
   profileImageUrl: string | null;
 };
 
-type FriendsTab = 'search' | 'received' | 'sent' | 'friends';
-type SearchRelation = 'friend' | 'sent' | 'received' | 'available';
-type ActionDone = 'none' | 'done';
+type FriendsTab = "search" | "received" | "sent" | "friends";
+type SearchRelation = "friend" | "sent" | "received" | "available";
+type ActionDone = "none" | "done";
 
-const AUTH_REDIRECT = Symbol('AUTH_REDIRECT');
+const AUTH_REDIRECT = Symbol("AUTH_REDIRECT");
 
 export default function FriendsPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const [activeTab, setActiveTab] = useState<FriendsTab>('search');
+  const [activeTab, setActiveTab] = useState<FriendsTab>("search");
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-  const [message, setMessage] = useState('');
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
 
-  const [searchNickname, setSearchNickname] = useState('');
-  const [searchResult, setSearchResult] = useState<UserSearchResponse | null>(null);
+  const [searchNickname, setSearchNickname] = useState("");
+  const [searchResult, setSearchResult] = useState<UserSearchResponse | null>(
+    null,
+  );
   const [sending, setSending] = useState(false);
-  const [requestedUserIds, setRequestedUserIds] = useState<Set<number>>(new Set());
-  const [lastRequestedUserId, setLastRequestedUserId] = useState<number | null>(null);
+  const [requestedUserIds, setRequestedUserIds] = useState<Set<number>>(
+    new Set(),
+  );
+  const [lastRequestedUserId, setLastRequestedUserId] = useState<number | null>(
+    null,
+  );
 
   const [received, setReceived] = useState<FriendRequestResponse[]>([]);
   const [sent, setSent] = useState<FriendRequestResponse[]>([]);
   const [friends, setFriends] = useState<FriendInfoResponse[]>([]);
-  const [processingRequestIds, setProcessingRequestIds] = useState<Set<number>>(new Set());
-  const [deletingFriendIds, setDeletingFriendIds] = useState<Set<number>>(new Set());
-  const [lastActionRequestId, setLastActionRequestId] = useState<number | null>(null);
-  const [lastDeletedFriendId, setLastDeletedFriendId] = useState<number | null>(null);
-  const [selectedUser, setSelectedUser] = useState<UserDetailResponse | null>(null);
+  const [processingRequestIds, setProcessingRequestIds] = useState<Set<number>>(
+    new Set(),
+  );
+  const [deletingFriendIds, setDeletingFriendIds] = useState<Set<number>>(
+    new Set(),
+  );
+  const [lastActionRequestId, setLastActionRequestId] = useState<number | null>(
+    null,
+  );
+  const [lastDeletedFriendId, setLastDeletedFriendId] = useState<number | null>(
+    null,
+  );
+  const [selectedUser, setSelectedUser] = useState<UserDetailResponse | null>(
+    null,
+  );
   const [profileLoading, setProfileLoading] = useState(false);
 
   useEffect(() => {
@@ -83,14 +99,16 @@ export default function FriendsPage() {
     return () => window.clearTimeout(timer);
   }, [lastDeletedFriendId]);
 
-  async function withAuth<T>(task: () => Promise<T>): Promise<T | typeof AUTH_REDIRECT> {
+  async function withAuth<T>(
+    task: () => Promise<T>,
+  ): Promise<T | typeof AUTH_REDIRECT> {
     try {
       return await task();
     } catch (e) {
       const status = getHttpStatus(e);
       if (isUnauthorizedStatus(status)) {
         clearAuthSession();
-        router.replace('/login');
+        router.replace("/login");
         return AUTH_REDIRECT;
       }
       throw e;
@@ -98,24 +116,39 @@ export default function FriendsPage() {
   }
 
   useEffect(() => {
-    const tab = searchParams.get('tab');
-    if (tab === 'search' || tab === 'received' || tab === 'sent' || tab === 'friends') {
+    const tab = searchParams.get("tab");
+    if (
+      tab === "search" ||
+      tab === "received" ||
+      tab === "sent" ||
+      tab === "friends"
+    ) {
       setActiveTab(tab);
     }
   }, [searchParams]);
 
   async function loadReceived() {
-    const data = await withAuth(() => apiFetch<FriendRequestResponse[]>('/api/friendship/requests/received', { method: 'GET' }));
+    const data = await withAuth(() =>
+      apiFetch<FriendRequestResponse[]>("/api/friendship/requests/received", {
+        method: "GET",
+      }),
+    );
     if (data !== AUTH_REDIRECT) setReceived(data);
   }
 
   async function loadSent() {
-    const data = await withAuth(() => apiFetch<FriendRequestResponse[]>('/api/friendship/requests/sent', { method: 'GET' }));
+    const data = await withAuth(() =>
+      apiFetch<FriendRequestResponse[]>("/api/friendship/requests/sent", {
+        method: "GET",
+      }),
+    );
     if (data !== AUTH_REDIRECT) setSent(data);
   }
 
   async function loadFriends() {
-    const data = await withAuth(() => apiFetch<FriendInfoResponse[]>('/api/friendship', { method: 'GET' }));
+    const data = await withAuth(() =>
+      apiFetch<FriendInfoResponse[]>("/api/friendship", { method: "GET" }),
+    );
     if (data !== AUTH_REDIRECT) setFriends(data);
   }
 
@@ -130,38 +163,48 @@ export default function FriendsPage() {
   }, []);
 
   useEffect(() => {
-    if (activeTab === 'received') {
+    if (activeTab === "received") {
       void (async () => {
         setLoading(true);
-        setError('');
+        setError("");
         try {
           await loadReceived();
         } catch (e) {
-          setError(e instanceof Error ? e.message : '받은 요청 목록을 불러오지 못했습니다.');
+          setError(
+            e instanceof Error
+              ? e.message
+              : "받은 요청 목록을 불러오지 못했습니다.",
+          );
         } finally {
           setLoading(false);
         }
       })();
-    } else if (activeTab === 'sent') {
+    } else if (activeTab === "sent") {
       void (async () => {
         setLoading(true);
-        setError('');
+        setError("");
         try {
           await loadSent();
         } catch (e) {
-          setError(e instanceof Error ? e.message : '보낸 요청 목록을 불러오지 못했습니다.');
+          setError(
+            e instanceof Error
+              ? e.message
+              : "보낸 요청 목록을 불러오지 못했습니다.",
+          );
         } finally {
           setLoading(false);
         }
       })();
-    } else if (activeTab === 'friends') {
+    } else if (activeTab === "friends") {
       void (async () => {
         setLoading(true);
-        setError('');
+        setError("");
         try {
           await loadFriends();
         } catch (e) {
-          setError(e instanceof Error ? e.message : '친구 목록을 불러오지 못했습니다.');
+          setError(
+            e instanceof Error ? e.message : "친구 목록을 불러오지 못했습니다.",
+          );
         } finally {
           setLoading(false);
         }
@@ -172,34 +215,40 @@ export default function FriendsPage() {
   async function handleSearch() {
     const query = searchNickname.trim();
     if (!query) {
-      setError('검색할 닉네임을 입력해 주세요.');
+      setError("검색할 닉네임을 입력해 주세요.");
       return;
     }
 
     setLoading(true);
-    setError('');
-    setMessage('');
+    setError("");
+    setMessage("");
     setSearchResult(null);
     try {
       const result = await withAuth(() =>
-        apiFetch<UserSearchResponse>(`/api/user/search?nickname=${encodeURIComponent(query)}`, { method: 'GET' }),
+        apiFetch<UserSearchResponse>(
+          `/api/user/search?nickname=${encodeURIComponent(query)}`,
+          { method: "GET" },
+        ),
       );
       if (result !== AUTH_REDIRECT) setSearchResult(result);
     } catch (e) {
-      setError(e instanceof Error ? e.message : '유저 검색에 실패했습니다.');
+      setError(e instanceof Error ? e.message : "유저 검색에 실패했습니다.");
     } finally {
       setLoading(false);
     }
   }
 
   async function handleSendRequest(userId: number, nickname: string) {
-    if (requestedUserIds.has(userId) || sent.some((s) => s.userId === userId)) return;
+    if (requestedUserIds.has(userId) || sent.some((s) => s.userId === userId))
+      return;
     setLastRequestedUserId(null);
     setSending(true);
-    setError('');
-    setMessage('');
+    setError("");
+    setMessage("");
     try {
-      const ok = await withAuth(() => apiFetch<null>(`/api/friendship/request/${userId}`, { method: 'POST' }));
+      const ok = await withAuth(() =>
+        apiFetch<null>(`/api/friendship/request/${userId}`, { method: "POST" }),
+      );
       if (ok === AUTH_REDIRECT) return;
       setMessage(`${nickname}님께 친구 요청을 보냈습니다.`);
       setRequestedUserIds((prev) => new Set(prev).add(userId));
@@ -218,37 +267,57 @@ export default function FriendsPage() {
       );
       setLastRequestedUserId(userId);
     } catch (e) {
-      setError(e instanceof Error ? e.message : '친구 요청 전송에 실패했습니다.');
+      setError(
+        e instanceof Error ? e.message : "친구 요청 전송에 실패했습니다.",
+      );
     } finally {
       setSending(false);
     }
   }
 
   async function handleAccept(friendshipId: number) {
-    window.dispatchEvent(new CustomEvent('friend-requests-changed', { detail: { delta: -1 } }));
+    window.dispatchEvent(
+      new CustomEvent("friend-requests-changed", { detail: { delta: -1 } }),
+    );
     setLastActionRequestId(null);
     setProcessingRequestIds((prev) => new Set(prev).add(friendshipId));
-    const target = received.find((r) => r.friendshipId === friendshipId) ?? null;
+    const target =
+      received.find((r) => r.friendshipId === friendshipId) ?? null;
     const prevReceived = received;
     if (target) {
-      setReceived((prev) => prev.filter((r) => r.friendshipId !== friendshipId));
+      setReceived((prev) =>
+        prev.filter((r) => r.friendshipId !== friendshipId),
+      );
       setFriends((prev) =>
         prev.some((f) => f.id === target.userId)
           ? prev
-          : [{ id: target.userId, nickname: target.nickname, profileImageUrl: target.profileImageUrl }, ...prev],
+          : [
+              {
+                id: target.userId,
+                nickname: target.nickname,
+                profileImageUrl: target.profileImageUrl,
+              },
+              ...prev,
+            ],
       );
     }
-    setError('');
-    setMessage('');
+    setError("");
+    setMessage("");
     try {
-      const ok = await withAuth(() => apiFetch<null>(`/api/friendship/${friendshipId}/accept`, { method: 'POST' }));
+      const ok = await withAuth(() =>
+        apiFetch<null>(`/api/friendship/${friendshipId}/accept`, {
+          method: "POST",
+        }),
+      );
       if (ok === AUTH_REDIRECT) return;
-      setMessage('친구 요청을 수락했습니다.');
+      setMessage("친구 요청을 수락했습니다.");
       setLastActionRequestId(friendshipId);
     } catch (e) {
       setReceived(prevReceived);
-      window.dispatchEvent(new CustomEvent('friend-requests-changed', { detail: { delta: +1 } }));
-      setError(e instanceof Error ? e.message : '요청 수락에 실패했습니다.');
+      window.dispatchEvent(
+        new CustomEvent("friend-requests-changed", { detail: { delta: +1 } }),
+      );
+      setError(e instanceof Error ? e.message : "요청 수락에 실패했습니다.");
     } finally {
       setProcessingRequestIds((prev) => {
         const next = new Set(prev);
@@ -259,22 +328,30 @@ export default function FriendsPage() {
   }
 
   async function handleReject(friendshipId: number) {
-    window.dispatchEvent(new CustomEvent('friend-requests-changed', { detail: { delta: -1 } }));
+    window.dispatchEvent(
+      new CustomEvent("friend-requests-changed", { detail: { delta: -1 } }),
+    );
     setLastActionRequestId(null);
     setProcessingRequestIds((prev) => new Set(prev).add(friendshipId));
     const prevReceived = received;
     setReceived((prev) => prev.filter((r) => r.friendshipId !== friendshipId));
-    setError('');
-    setMessage('');
+    setError("");
+    setMessage("");
     try {
-      const ok = await withAuth(() => apiFetch<null>(`/api/friendship/${friendshipId}/reject`, { method: 'DELETE' }));
+      const ok = await withAuth(() =>
+        apiFetch<null>(`/api/friendship/${friendshipId}/reject`, {
+          method: "DELETE",
+        }),
+      );
       if (ok === AUTH_REDIRECT) return;
-      setMessage('친구 요청을 거절했습니다.');
+      setMessage("친구 요청을 거절했습니다.");
       setLastActionRequestId(friendshipId);
     } catch (e) {
       setReceived(prevReceived);
-      window.dispatchEvent(new CustomEvent('friend-requests-changed', { detail: { delta: +1 } }));
-      setError(e instanceof Error ? e.message : '요청 거절에 실패했습니다.');
+      window.dispatchEvent(
+        new CustomEvent("friend-requests-changed", { detail: { delta: +1 } }),
+      );
+      setError(e instanceof Error ? e.message : "요청 거절에 실패했습니다.");
     } finally {
       setProcessingRequestIds((prev) => {
         const next = new Set(prev);
@@ -290,16 +367,20 @@ export default function FriendsPage() {
     setDeletingFriendIds((prev) => new Set(prev).add(friendId));
     const prevFriends = friends;
     setFriends((prev) => prev.filter((f) => f.id !== friendId));
-    setError('');
-    setMessage('');
+    setError("");
+    setMessage("");
     try {
-      const ok = await withAuth(() => apiFetch<null>(`/api/friendship/friends/${friendId}`, { method: 'DELETE' }));
+      const ok = await withAuth(() =>
+        apiFetch<null>(`/api/friendship/friends/${friendId}`, {
+          method: "DELETE",
+        }),
+      );
       if (ok === AUTH_REDIRECT) return;
-      setMessage('친구를 삭제했습니다.');
+      setMessage("친구를 삭제했습니다.");
       setLastDeletedFriendId(friendId);
     } catch (e) {
       setFriends(prevFriends);
-      setError(e instanceof Error ? e.message : '친구 삭제에 실패했습니다.');
+      setError(e instanceof Error ? e.message : "친구 삭제에 실패했습니다.");
     } finally {
       setDeletingFriendIds((prev) => {
         const next = new Set(prev);
@@ -311,12 +392,16 @@ export default function FriendsPage() {
 
   async function openUserDetail(userId: number) {
     setProfileLoading(true);
-    setError('');
+    setError("");
     try {
-      const detail = await withAuth(() => apiFetch<UserDetailResponse>(`/api/user/${userId}`, { method: 'GET' }));
+      const detail = await withAuth(() =>
+        apiFetch<UserDetailResponse>(`/api/user/${userId}`, { method: "GET" }),
+      );
       if (detail !== AUTH_REDIRECT) setSelectedUser(detail);
     } catch (e) {
-      setError(e instanceof Error ? e.message : '유저 정보를 불러오지 못했습니다.');
+      setError(
+        e instanceof Error ? e.message : "유저 정보를 불러오지 못했습니다.",
+      );
     } finally {
       setProfileLoading(false);
     }
@@ -324,89 +409,121 @@ export default function FriendsPage() {
 
   const tabTitle = useMemo(() => {
     switch (activeTab) {
-      case 'search':
-        return '유저 검색';
-      case 'received':
-        return '받은 요청';
-      case 'sent':
-        return '보낸 요청';
-      case 'friends':
-        return '친구 목록';
+      case "search":
+        return "유저 검색";
+      case "received":
+        return "받은 요청";
+      case "sent":
+        return "보낸 요청";
+      case "friends":
+        return "친구 목록";
       default:
-        return '';
+        return "";
     }
   }, [activeTab]);
 
-  const friendIdSet = useMemo(() => new Set(friends.map((f) => f.id)), [friends]);
-  const sentUserIdSet = useMemo(() => new Set(sent.map((s) => s.userId)), [sent]);
-  const receivedUserIdSet = useMemo(() => new Set(received.map((r) => r.userId)), [received]);
+  const friendIdSet = useMemo(
+    () => new Set(friends.map((f) => f.id)),
+    [friends],
+  );
+  const sentUserIdSet = useMemo(
+    () => new Set(sent.map((s) => s.userId)),
+    [sent],
+  );
+  const receivedUserIdSet = useMemo(
+    () => new Set(received.map((r) => r.userId)),
+    [received],
+  );
 
   function getSearchRelation(userId: number): SearchRelation {
-    if (friendIdSet.has(userId)) return 'friend';
-    if (sentUserIdSet.has(userId) || requestedUserIds.has(userId)) return 'sent';
-    if (receivedUserIdSet.has(userId)) return 'received';
-    return 'available';
+    if (friendIdSet.has(userId)) return "friend";
+    if (sentUserIdSet.has(userId) || requestedUserIds.has(userId))
+      return "sent";
+    if (receivedUserIdSet.has(userId)) return "received";
+    return "available";
   }
 
-  const selectedUserRelation = selectedUser ? getSearchRelation(selectedUser.id) : 'available';
+  const selectedUserRelation = selectedUser
+    ? getSearchRelation(selectedUser.id)
+    : "available";
   const selectedReceivedRequestId =
-    selectedUserRelation === 'received' && selectedUser
-      ? (received.find((r) => r.userId === selectedUser.id)?.friendshipId ?? null)
+    selectedUserRelation === "received" && selectedUser
+      ? (received.find((r) => r.userId === selectedUser.id)?.friendshipId ??
+        null)
       : null;
-  const selectedFriendId = selectedUserRelation === 'friend' && selectedUser ? selectedUser.id : null;
+  const selectedFriendId =
+    selectedUserRelation === "friend" && selectedUser ? selectedUser.id : null;
 
   return (
     <main className="relative min-h-[calc(100vh-4rem)] overflow-hidden text-white">
       <div className="pointer-events-none absolute left-1/2 top-[-200px] h-[420px] w-[420px] -translate-x-1/2 rounded-full bg-blue-500/10 blur-3xl" />
       <section className="relative mx-auto max-w-5xl px-6 py-12">
         <h1 className="text-4xl font-black tracking-tight">친구</h1>
-        <p className="mt-2 text-slate-400">친구를 검색하고 요청을 관리하세요.</p>
+        <p className="mt-2 text-slate-400">
+          친구를 검색하고 요청을 관리하세요.
+        </p>
 
         <div className="mt-6 flex flex-wrap gap-2">
-          {([
-            ['search', '유저 검색'],
-            ['received', '받은 요청'],
-            ['sent', '보낸 요청'],
-            ['friends', '친구 목록'],
-          ] as const).map(([id, label]) => (
+          {(
+            [
+              ["search", "유저 검색"],
+              ["received", "받은 요청"],
+              ["sent", "보낸 요청"],
+              ["friends", "친구 목록"],
+            ] as const
+          ).map(([id, label]) => (
             <button
               key={id}
               type="button"
               onClick={() => setActiveTab(id)}
               className={`relative rounded-xl px-4 py-2 text-sm font-bold transition ${
                 activeTab === id
-                  ? 'bg-gradient-to-r from-blue-500 to-violet-500 text-white'
-                  : 'border border-white/20 text-slate-200 hover:bg-white/10'
+                  ? "bg-gradient-to-r from-blue-500 to-violet-500 text-white"
+                  : "border border-white/20 text-slate-200 hover:bg-white/10"
               }`}
             >
               {label}
-              {id !== 'search' ? (
+              {id !== "search" ? (
                 <span
                   className={`ml-2 rounded-full px-1.5 py-0.5 text-[10px] font-black ${
-                    activeTab === id ? 'bg-white/20 text-white' : 'bg-white/10 text-slate-200'
+                    activeTab === id
+                      ? "bg-white/20 text-white"
+                      : "bg-white/10 text-slate-200"
                   }`}
                 >
-                  {id === 'received' ? received.length : id === 'sent' ? sent.length : friends.length}
+                  {id === "received"
+                    ? received.length
+                    : id === "sent"
+                      ? sent.length
+                      : friends.length}
                 </span>
               ) : null}
             </button>
           ))}
         </div>
 
-        {error ? <p className="mt-4 rounded-xl bg-rose-500/10 px-4 py-3 text-rose-200">{error}</p> : null}
-        {message ? <p className="mt-4 rounded-xl bg-emerald-500/10 px-4 py-3 text-emerald-200">{message}</p> : null}
+        {error ? (
+          <p className="mt-4 rounded-xl bg-rose-500/10 px-4 py-3 text-rose-200">
+            {error}
+          </p>
+        ) : null}
+        {message ? (
+          <p className="mt-4 rounded-xl bg-emerald-500/10 px-4 py-3 text-emerald-200">
+            {message}
+          </p>
+        ) : null}
 
         <section className="mt-6 rounded-2xl border border-white/10 bg-white/[0.04] p-6">
           <h2 className="text-xl font-bold">{tabTitle}</h2>
 
-          {activeTab === 'search' ? (
+          {activeTab === "search" ? (
             <div className="mt-4">
               <div className="flex flex-col gap-3 sm:flex-row">
                 <input
                   value={searchNickname}
                   onChange={(e) => setSearchNickname(e.target.value)}
                   onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
+                    if (e.key === "Enter") {
                       e.preventDefault();
                       void handleSearch();
                     }
@@ -421,7 +538,7 @@ export default function FriendsPage() {
                   disabled={loading}
                   className="rounded-xl border border-white/20 px-4 py-2 font-semibold disabled:opacity-60"
                 >
-                  {loading ? '검색 중...' : '검색'}
+                  {loading ? "검색 중..." : "검색"}
                 </button>
               </div>
 
@@ -429,59 +546,66 @@ export default function FriendsPage() {
                 <div className="mt-4 flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-slate-900/60 p-4">
                   {(() => {
                     const relation = getSearchRelation(searchResult.id);
-                    const disabled = sending || relation !== 'available';
+                    const disabled = sending || relation !== "available";
                     const buttonLabel =
-                      relation === 'friend'
-                        ? '이미 친구'
-                        : relation === 'received'
-                          ? '받은 요청 확인'
-                          : relation === 'sent'
-                            ? '요청 완료'
+                      relation === "friend"
+                        ? "이미 친구"
+                        : relation === "received"
+                          ? "받은 요청 확인"
+                          : relation === "sent"
+                            ? "요청 완료"
                             : sending
-                              ? '전송 중...'
-                              : '친구 요청';
+                              ? "전송 중..."
+                              : "친구 요청";
                     return (
                       <>
-                  <button
-                    type="button"
-                    onClick={() => void openUserDetail(searchResult.id)}
-                    className="flex items-center gap-3 rounded-lg px-1 py-1 text-left transition hover:bg-white/5"
-                  >
-                    <ProfileImage
-                      src={searchResult.profileImageUrl}
-                      alt="검색 유저 프로필"
-                      className="h-12 w-12 rounded-full border border-white/20 object-cover"
-                    />
-                    <div>
-                      <p className="text-xs text-slate-400">검색 결과</p>
-                      <div className="mt-0.5 flex items-center gap-2">
-                        <p className="text-lg font-bold">{searchResult.nickname}</p>
-                        {relation === 'friend' ? (
-                          <span className="rounded-full border border-emerald-400/30 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-black text-emerald-200">
-                            친구
-                          </span>
-                        ) : relation === 'sent' ? (
-                          <span className="rounded-full border border-cyan-400/30 bg-cyan-500/10 px-2 py-0.5 text-[10px] font-black text-cyan-200">
-                            요청중
-                          </span>
-                        ) : null}
-                      </div>
-                    </div>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void handleSendRequest(searchResult.id, searchResult.nickname)}
-                    disabled={disabled}
-                    className="rounded-xl bg-gradient-to-r from-blue-500 to-violet-500 px-4 py-2 text-sm font-black text-white disabled:opacity-60"
-                  >
-                    <ActionButtonLabel
-                      loading={sending && relation === 'available'}
-                      done={lastRequestedUserId === searchResult.id}
-                      idleText={buttonLabel}
-                      loadingText="전송 중..."
-                      doneText="요청 완료"
-                    />
-                  </button>
+                        <button
+                          type="button"
+                          onClick={() => void openUserDetail(searchResult.id)}
+                          className="flex items-center gap-3 rounded-lg px-1 py-1 text-left transition hover:bg-white/5"
+                        >
+                          <ProfileImage
+                            src={searchResult.profileImageUrl}
+                            alt="검색 유저 프로필"
+                            className="h-12 w-12 rounded-full border border-white/20 object-cover"
+                          />
+                          <div>
+                            <p className="text-xs text-slate-400">검색 결과</p>
+                            <div className="mt-0.5 flex items-center gap-2">
+                              <p className="text-lg font-bold">
+                                {searchResult.nickname}
+                              </p>
+                              {relation === "friend" ? (
+                                <span className="rounded-full border border-emerald-400/30 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-black text-emerald-200">
+                                  친구
+                                </span>
+                              ) : relation === "sent" ? (
+                                <span className="rounded-full border border-cyan-400/30 bg-cyan-500/10 px-2 py-0.5 text-[10px] font-black text-cyan-200">
+                                  요청중
+                                </span>
+                              ) : null}
+                            </div>
+                          </div>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void handleSendRequest(
+                              searchResult.id,
+                              searchResult.nickname,
+                            )
+                          }
+                          disabled={disabled}
+                          className="rounded-xl bg-gradient-to-r from-blue-500 to-violet-500 px-4 py-2 text-sm font-black text-white disabled:opacity-60"
+                        >
+                          <ActionButtonLabel
+                            loading={sending && relation === "available"}
+                            done={lastRequestedUserId === searchResult.id}
+                            idleText={buttonLabel}
+                            loadingText="전송 중..."
+                            doneText="요청 완료"
+                          />
+                        </button>
                       </>
                     );
                   })()}
@@ -490,10 +614,13 @@ export default function FriendsPage() {
             </div>
           ) : null}
 
-          {activeTab === 'received' ? (
+          {activeTab === "received" ? (
             <ListWrap empty="받은 친구 요청이 없습니다." loading={loading}>
               {received.map((r) => (
-                <div key={r.friendshipId} className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-slate-900/60 p-4">
+                <div
+                  key={r.friendshipId}
+                  className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-slate-900/60 p-4"
+                >
                   <UserCell
                     userId={r.userId}
                     nickname={r.nickname}
@@ -535,10 +662,13 @@ export default function FriendsPage() {
             </ListWrap>
           ) : null}
 
-          {activeTab === 'sent' ? (
+          {activeTab === "sent" ? (
             <ListWrap empty="보낸 친구 요청이 없습니다." loading={loading}>
               {sent.map((r) => (
-                <div key={r.friendshipId} className="rounded-xl border border-white/10 bg-slate-900/60 p-4">
+                <div
+                  key={r.friendshipId}
+                  className="rounded-xl border border-white/10 bg-slate-900/60 p-4"
+                >
                   <div className="flex items-center justify-between gap-3">
                     <UserCell
                       userId={r.userId}
@@ -555,10 +685,13 @@ export default function FriendsPage() {
             </ListWrap>
           ) : null}
 
-          {activeTab === 'friends' ? (
+          {activeTab === "friends" ? (
             <ListWrap empty="친구가 없습니다." loading={loading}>
               {friends.map((f) => (
-                <div key={f.id} className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-slate-900/60 p-4">
+                <div
+                  key={f.id}
+                  className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-slate-900/60 p-4"
+                >
                   <UserCell
                     userId={f.id}
                     nickname={f.nickname}
@@ -593,21 +726,39 @@ export default function FriendsPage() {
           relation={selectedUserRelation}
           pendingRequestId={selectedReceivedRequestId}
           isSending={sending}
-          isProcessingRequest={selectedReceivedRequestId ? processingRequestIds.has(selectedReceivedRequestId) : false}
-          isDeletingFriend={selectedFriendId ? deletingFriendIds.has(selectedFriendId) : false}
+          isProcessingRequest={
+            selectedReceivedRequestId
+              ? processingRequestIds.has(selectedReceivedRequestId)
+              : false
+          }
+          isDeletingFriend={
+            selectedFriendId ? deletingFriendIds.has(selectedFriendId) : false
+          }
           requestedDone={lastRequestedUserId === selectedUser.id}
-          processedDone={selectedReceivedRequestId ? lastActionRequestId === selectedReceivedRequestId : false}
-          deletedDone={selectedFriendId ? lastDeletedFriendId === selectedFriendId : false}
-          onSendRequest={() => void handleSendRequest(selectedUser.id, selectedUser.nickname)}
+          processedDone={
+            selectedReceivedRequestId
+              ? lastActionRequestId === selectedReceivedRequestId
+              : false
+          }
+          deletedDone={
+            selectedFriendId ? lastDeletedFriendId === selectedFriendId : false
+          }
+          onSendRequest={() =>
+            void handleSendRequest(selectedUser.id, selectedUser.nickname)
+          }
           onAcceptRequest={() => {
-            if (selectedReceivedRequestId) void handleAccept(selectedReceivedRequestId);
+            if (selectedReceivedRequestId)
+              void handleAccept(selectedReceivedRequestId);
           }}
           onRejectRequest={() => {
-            if (selectedReceivedRequestId) void handleReject(selectedReceivedRequestId);
+            if (selectedReceivedRequestId)
+              void handleReject(selectedReceivedRequestId);
           }}
-          onDeleteFriend={() => void handleDeleteFriend(selectedUser.id, selectedUser.nickname)}
+          onDeleteFriend={() =>
+            void handleDeleteFriend(selectedUser.id, selectedUser.nickname)
+          }
           onMoveToReceivedTab={() => {
-            setActiveTab('received');
+            setActiveTab("received");
             setSelectedUser(null);
           }}
         />
@@ -633,7 +784,11 @@ function UserCell({
       onClick={() => onOpen(userId)}
       className="flex items-center gap-3 rounded-lg px-1 py-1 text-left transition hover:bg-white/5"
     >
-      <ProfileImage src={imageUrl} alt="프로필" className="h-10 w-10 rounded-full border border-white/20 object-cover" />
+      <ProfileImage
+        src={imageUrl}
+        alt="프로필"
+        className="h-10 w-10 rounded-full border border-white/20 object-cover"
+      />
       <p className="font-bold text-white">{nickname}</p>
     </button>
   );
@@ -648,8 +803,10 @@ function ListWrap({
   empty: string;
   loading: boolean;
 }) {
-  if (loading) return <p className="mt-4 text-sm text-slate-300">불러오는 중...</p>;
-  if (children.length === 0) return <p className="mt-4 text-sm text-slate-400">{empty}</p>;
+  if (loading)
+    return <p className="mt-4 text-sm text-slate-300">불러오는 중...</p>;
+  if (children.length === 0)
+    return <p className="mt-4 text-sm text-slate-400">{empty}</p>;
   return <div className="mt-4 space-y-3">{children}</div>;
 }
 
@@ -689,7 +846,9 @@ function UserDetailModal({
   onMoveToReceivedTab: () => void;
 }) {
   const winRate =
-    user.totalGameCount > 0 ? Math.round((user.winGameCount / user.totalGameCount) * 1000) / 10 : 0;
+    user.totalGameCount > 0
+      ? Math.round((user.winGameCount / user.totalGameCount) * 1000) / 10
+      : 0;
 
   return (
     <div
@@ -742,9 +901,11 @@ function UserDetailModal({
                 <p className="mt-1 font-black">{winRate}%</p>
               </div>
             </div>
-            <p className="mt-3 text-xs text-slate-400">{user.isGuest ? '게스트 계정' : '일반 계정'}</p>
+            <p className="mt-3 text-xs text-slate-400">
+              {user.isGuest ? "게스트 계정" : "일반 계정"}
+            </p>
             <div className="mt-5 flex flex-wrap gap-2">
-              {relation === 'available' ? (
+              {relation === "available" ? (
                 <button
                   type="button"
                   onClick={onSendRequest}
@@ -760,7 +921,7 @@ function UserDetailModal({
                   />
                 </button>
               ) : null}
-              {relation === 'received' ? (
+              {relation === "received" ? (
                 <>
                   <button
                     type="button"
@@ -792,7 +953,7 @@ function UserDetailModal({
                   </button>
                 </>
               ) : null}
-              {relation === 'friend' ? (
+              {relation === "friend" ? (
                 <button
                   type="button"
                   onClick={onDeleteFriend}
@@ -808,12 +969,12 @@ function UserDetailModal({
                   />
                 </button>
               ) : null}
-              {relation === 'sent' ? (
+              {relation === "sent" ? (
                 <span className="rounded-lg border border-cyan-400/30 bg-cyan-500/10 px-3 py-1.5 text-sm font-bold text-cyan-200">
                   요청 보냄
                 </span>
               ) : null}
-              {relation === 'received' ? (
+              {relation === "received" ? (
                 <button
                   type="button"
                   onClick={onMoveToReceivedTab}
@@ -843,7 +1004,7 @@ function ActionButtonLabel({
   loadingText: string;
   doneText: string;
 }) {
-  const state: ActionDone = loading ? 'none' : done ? 'done' : 'none';
+  const state: ActionDone = loading ? "none" : done ? "done" : "none";
   if (loading) {
     return (
       <span className="inline-flex items-center gap-1.5">
@@ -852,12 +1013,16 @@ function ActionButtonLabel({
       </span>
     );
   }
-  if (state === 'done') {
-    return <span className="inline-flex items-center gap-1.5">✓ {doneText}</span>;
+  if (state === "done") {
+    return (
+      <span className="inline-flex items-center gap-1.5">✓ {doneText}</span>
+    );
   }
   return <span>{idleText}</span>;
 }
 
 function Spinner() {
-  return <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/30 border-t-white" />;
+  return (
+    <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+  );
 }

@@ -1,4 +1,4 @@
-'use client';
+"use client";
 
 import {
   startTransition,
@@ -8,15 +8,15 @@ import {
   useRef,
   useState,
   type ReactNode,
-} from 'react';
-import { useParams, useRouter } from 'next/navigation';
-import { createPortal } from 'react-dom';
-import type { DrawingCanvasHandle } from '@/components/DrawingCanvas';
-import { DrawingCanvas } from '@/components/DrawingCanvas';
-import { ProfileImage } from '@/components/ProfileImage';
-import { useRoomStomp, type RoomStompDestination } from '@/hooks/useRoomStomp';
-import { apiFetch, getHttpStatus } from '@/lib/api-client';
-import { clearAuthSession, isUnauthorizedStatus } from '@/lib/auth-session';
+} from "react";
+import { useParams, useRouter } from "next/navigation";
+import { createPortal } from "react-dom";
+import type { DrawingCanvasHandle } from "@/components/DrawingCanvas";
+import { DrawingCanvas } from "@/components/DrawingCanvas";
+import { ProfileImage } from "@/components/ProfileImage";
+import { useRoomStomp, type RoomStompDestination } from "@/hooks/useRoomStomp";
+import { apiFetch, getHttpStatus } from "@/lib/api-client";
+import { clearAuthSession, isUnauthorizedStatus } from "@/lib/auth-session";
 
 type Player = {
   id: number;
@@ -73,7 +73,7 @@ type RoundStartData = {
   roundId: number;
   roundNumber: number;
   keyword: string;
-  status: 'READY' | 'IN_PROGRESS' | 'FINISHED';
+  status: "READY" | "IN_PROGRESS" | "FINISHED";
   startedAt: string;
   /** 백엔드 RoundStartResponse.timeLimit(초) — 없으면 FALLBACK_ROUND_TIME_LIMIT_SEC */
   timeLimit?: number;
@@ -81,32 +81,40 @@ type RoundStartData = {
 
 /** STOMP 본문의 숫자 필드가 문자열로 올 때(Jackson 설정 등) 흡수 */
 function parseStompNumeric(v: unknown): number {
-  if (typeof v === 'number' && Number.isFinite(v)) return v;
-  if (typeof v === 'string' && /^\d+$/.test(v)) return Number(v);
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  if (typeof v === "string" && /^\d+$/.test(v)) return Number(v);
   return NaN;
 }
 
 /** `/sub/rooms/{id}` 로 오는 `RoundStartResponse` 형태를 `RoundStartData`로 변환 */
-function parseStompRoundStartPayload(o: Record<string, unknown>, fallbackRoomId: number): RoundStartData | null {
+function parseStompRoundStartPayload(
+  o: Record<string, unknown>,
+  fallbackRoomId: number,
+): RoundStartData | null {
   const kw = o.keyword;
-  if (typeof kw !== 'string' || !kw.trim()) return null;
+  if (typeof kw !== "string" || !kw.trim()) return null;
   const roundId = parseStompNumeric(o.roundId);
   const roundNumber = parseStompNumeric(o.roundNumber);
-  if (!Number.isFinite(roundId) || roundId <= 0 || !Number.isFinite(roundNumber) || roundNumber <= 0) {
+  if (
+    !Number.isFinite(roundId) ||
+    roundId <= 0 ||
+    !Number.isFinite(roundNumber) ||
+    roundNumber <= 0
+  ) {
     return null;
   }
-  let status: RoundStartData['status'] = 'IN_PROGRESS';
+  let status: RoundStartData["status"] = "IN_PROGRESS";
   const raw = o.status;
-  if (raw === 'READY' || raw === 'IN_PROGRESS' || raw === 'FINISHED') {
+  if (raw === "READY" || raw === "IN_PROGRESS" || raw === "FINISHED") {
     status = raw;
-  } else if (raw && typeof raw === 'object' && 'name' in (raw as object)) {
+  } else if (raw && typeof raw === "object" && "name" in (raw as object)) {
     const n = (raw as { name?: unknown }).name;
-    if (n === 'READY' || n === 'IN_PROGRESS' || n === 'FINISHED') status = n;
+    if (n === "READY" || n === "IN_PROGRESS" || n === "FINISHED") status = n;
   }
   const rid = parseStompNumeric(o.roomId);
   const roomId = Number.isFinite(rid) && rid > 0 ? rid : fallbackRoomId;
-  let startedAt = '';
-  if (typeof o.startedAt === 'string') startedAt = o.startedAt;
+  let startedAt = "";
+  if (typeof o.startedAt === "string") startedAt = o.startedAt;
   else if (o.startedAt != null) startedAt = JSON.stringify(o.startedAt);
 
   const tl = parseStompNumeric(o.timeLimit);
@@ -128,7 +136,7 @@ type CurrentRoundData = {
   roundId: number;
   roundNumber: number;
   keyword: string;
-  status: 'READY' | 'IN_PROGRESS' | 'FINISHED';
+  status: "READY" | "IN_PROGRESS" | "FINISHED";
   isTiebreaker: boolean;
   /** ISO 등 서버 시작 시각 — 있으면 탭 간 남은 시간 동기화 */
   startedAt?: string;
@@ -138,7 +146,10 @@ type CurrentRoundData = {
 };
 
 /** Jackson이 `isTiebreaker()`를 `tiebreaker`로 직렬화하는 경우를 흡수합니다. */
-type CurrentRoundDataJson = Omit<CurrentRoundData, 'isTiebreaker' | 'participants'> & {
+type CurrentRoundDataJson = Omit<
+  CurrentRoundData,
+  "isTiebreaker" | "participants"
+> & {
   isTiebreaker?: boolean;
   tiebreaker?: boolean;
   participants: CurrentRoundParticipantJson[];
@@ -171,7 +182,7 @@ type ChatMessageDtoWs = {
 type RoomChatLogEntry = {
   id: string;
   at: number;
-  kind: 'TALK' | 'NOTICE';
+  kind: "TALK" | "NOTICE";
   sender: string;
   message: string;
 };
@@ -198,16 +209,18 @@ type RoundEndScoreboardState = {
   fetchError?: string;
 };
 
-function normalizeRoundSubmissionItem(raw: unknown): RoundSubmissionItem | null {
-  if (!raw || typeof raw !== 'object') return null;
+function normalizeRoundSubmissionItem(
+  raw: unknown,
+): RoundSubmissionItem | null {
+  if (!raw || typeof raw !== "object") return null;
   const o = raw as Record<string, unknown>;
   const participantId = Number(o.participantId);
   if (!Number.isFinite(participantId)) return null;
   return {
     participantId,
-    nickname: String(o.nickname ?? ''),
-    imageData: String(o.imageData ?? ''),
-    aiAnswer: String(o.aiAnswer ?? ''),
+    nickname: String(o.nickname ?? ""),
+    imageData: String(o.imageData ?? ""),
+    aiAnswer: String(o.aiAnswer ?? ""),
     score: Number(o.score ?? 0),
     winner: Boolean(o.winner),
   };
@@ -247,20 +260,20 @@ function isQuickDrawStrokeArray(value: unknown): value is QuickDrawStroke[] {
 }
 
 function quickDrawToDataUrl(strokes: QuickDrawStroke[]): string | null {
-  if (typeof document === 'undefined') return null;
+  if (typeof document === "undefined") return null;
   const size = 512;
   const padding = 24;
-  const canvas = document.createElement('canvas');
+  const canvas = document.createElement("canvas");
   canvas.width = size;
   canvas.height = size;
-  const ctx = canvas.getContext('2d');
+  const ctx = canvas.getContext("2d");
   if (!ctx) return null;
 
-  ctx.fillStyle = '#ffffff';
+  ctx.fillStyle = "#ffffff";
   ctx.fillRect(0, 0, size, size);
-  ctx.lineCap = 'round';
-  ctx.lineJoin = 'round';
-  ctx.strokeStyle = '#111827';
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.strokeStyle = "#111827";
   ctx.lineWidth = 6;
 
   let minX = Number.POSITIVE_INFINITY;
@@ -281,13 +294,21 @@ function quickDrawToDataUrl(strokes: QuickDrawStroke[]): string | null {
     }
   }
 
-  if (!Number.isFinite(minX) || !Number.isFinite(minY) || !Number.isFinite(maxX) || !Number.isFinite(maxY)) {
+  if (
+    !Number.isFinite(minX) ||
+    !Number.isFinite(minY) ||
+    !Number.isFinite(maxX) ||
+    !Number.isFinite(maxY)
+  ) {
     return null;
   }
 
   const srcW = Math.max(1, maxX - minX);
   const srcH = Math.max(1, maxY - minY);
-  const scale = Math.min((size - padding * 2) / srcW, (size - padding * 2) / srcH);
+  const scale = Math.min(
+    (size - padding * 2) / srcW,
+    (size - padding * 2) / srcH,
+  );
   const offsetX = (size - srcW * scale) / 2;
   const offsetY = (size - srcH * scale) / 2;
 
@@ -316,14 +337,19 @@ function quickDrawToDataUrl(strokes: QuickDrawStroke[]): string | null {
     if (started) ctx.stroke();
   }
 
-  return canvas.toDataURL('image/png');
+  return canvas.toDataURL("image/png");
 }
 
 function resolveSubmissionImageSrc(raw: string): string | null {
   const value = raw.trim();
   if (!value) return null;
-  if (value.startsWith('data:image')) return value;
-  if (value.startsWith('http://') || value.startsWith('https://') || value.startsWith('blob:')) return value;
+  if (value.startsWith("data:image")) return value;
+  if (
+    value.startsWith("http://") ||
+    value.startsWith("https://") ||
+    value.startsWith("blob:")
+  )
+    return value;
 
   try {
     const parsed = JSON.parse(value) as unknown;
@@ -337,13 +363,13 @@ function resolveSubmissionImageSrc(raw: string): string | null {
 }
 
 function normalizeRankingRow(raw: unknown): FinalRankingRow | null {
-  if (!raw || typeof raw !== 'object') return null;
+  if (!raw || typeof raw !== "object") return null;
   const o = raw as Record<string, unknown>;
   const userId = Number(o.userId);
   if (!Number.isFinite(userId)) return null;
   return {
     userId,
-    nickname: String(o.nickname ?? ''),
+    nickname: String(o.nickname ?? ""),
     roundWinCount: Number(o.roundWinCount ?? 0),
     isWinner: Boolean(o.isWinner ?? o.winner),
   };
@@ -356,7 +382,7 @@ function roomCapacityFromDetail(d: RoomDetailData): {
 } {
   const t = d.totalRounds;
   const totalRounds =
-    typeof t === 'number' && Number.isFinite(t) && t > 0 ? Math.floor(t) : null;
+    typeof t === "number" && Number.isFinite(t) && t > 0 ? Math.floor(t) : null;
   return { curPlayers: d.curPlayers, maxPlayers: d.maxPlayers, totalRounds };
 }
 
@@ -384,10 +410,12 @@ function submissionNicknameIsAiInRoom(
   );
 }
 
-function normalizeWsSubmitDrawing(o: Record<string, unknown>): SubmitDrawingData {
+function normalizeWsSubmitDrawing(
+  o: Record<string, unknown>,
+): SubmitDrawingData {
   return {
     roundId: Number(o.roundId),
-    submittedAiAnswer: String(o.submittedAiAnswer ?? ''),
+    submittedAiAnswer: String(o.submittedAiAnswer ?? ""),
     submittedScore: Number(o.submittedScore ?? 0),
     submittedCount: Number(o.submittedCount ?? 0),
     totalParticipantCount: Number(o.totalParticipantCount ?? 0),
@@ -395,11 +423,16 @@ function normalizeWsSubmitDrawing(o: Record<string, unknown>): SubmitDrawingData
     gameFinished: Boolean(o.gameFinished),
     tieBreakerStarted: Boolean(o.tieBreakerStarted),
     roundWinnerParticipantId:
-      o.roundWinnerParticipantId != null ? Number(o.roundWinnerParticipantId) : undefined,
-    roundWinnerAiAnswer: o.roundWinnerAiAnswer != null ? String(o.roundWinnerAiAnswer) : undefined,
-    roundWinnerScore: o.roundWinnerScore != null ? Number(o.roundWinnerScore) : undefined,
+      o.roundWinnerParticipantId != null
+        ? Number(o.roundWinnerParticipantId)
+        : undefined,
+    roundWinnerAiAnswer:
+      o.roundWinnerAiAnswer != null ? String(o.roundWinnerAiAnswer) : undefined,
+    roundWinnerScore:
+      o.roundWinnerScore != null ? Number(o.roundWinnerScore) : undefined,
     nextRoundId: o.nextRoundId != null ? Number(o.nextRoundId) : undefined,
-    nextRoundNumber: o.nextRoundNumber != null ? Number(o.nextRoundNumber) : undefined,
+    nextRoundNumber:
+      o.nextRoundNumber != null ? Number(o.nextRoundNumber) : undefined,
   };
 }
 
@@ -413,7 +446,7 @@ type PersistedRoundUi = {
 const PERSIST_ROUND_KEY = (roomId: number) => `drawrace_round_ui_${roomId}`;
 
 function loadPersistedRoundUi(roomId: number): PersistedRoundUi | null {
-  if (typeof window === 'undefined') return null;
+  if (typeof window === "undefined") return null;
   try {
     const raw = sessionStorage.getItem(PERSIST_ROUND_KEY(roomId));
     if (!raw) return null;
@@ -424,12 +457,12 @@ function loadPersistedRoundUi(roomId: number): PersistedRoundUi | null {
 }
 
 function savePersistedRoundUi(roomId: number, state: PersistedRoundUi) {
-  if (typeof window === 'undefined') return;
+  if (typeof window === "undefined") return;
   sessionStorage.setItem(PERSIST_ROUND_KEY(roomId), JSON.stringify(state));
 }
 
 function clearPersistedRoundUi(roomId: number) {
-  if (typeof window === 'undefined') return;
+  if (typeof window === "undefined") return;
   sessionStorage.removeItem(PERSIST_ROUND_KEY(roomId));
 }
 
@@ -456,14 +489,23 @@ function patchPersistedAfterSubmit(
   });
 }
 
-function finalizePlayersForRound(roomId: number, roundId: number, players: Player[]): Player[] {
+function finalizePlayersForRound(
+  roomId: number,
+  roundId: number,
+  players: Player[],
+): Player[] {
   const persisted = loadPersistedRoundUi(roomId);
   if (!persisted || persisted.roundId !== roundId) return players;
   const idSet = new Set(persisted.submittedParticipantIds);
-  return players.map((p) => ({ ...p, submitted: p.submitted || idSet.has(p.id) }));
+  return players.map((p) => ({
+    ...p,
+    submitted: p.submitted || idSet.has(p.id),
+  }));
 }
 
-function normalizeRoundParticipant(p: CurrentRoundParticipantJson): CurrentRoundParticipant {
+function normalizeRoundParticipant(
+  p: CurrentRoundParticipantJson,
+): CurrentRoundParticipant {
   return {
     participantId: p.participantId,
     roundWinCount: p.roundWinCount,
@@ -473,14 +515,16 @@ function normalizeRoundParticipant(p: CurrentRoundParticipantJson): CurrentRound
   };
 }
 
-function normalizeCurrentRoundData(raw: CurrentRoundDataJson): CurrentRoundData {
+function normalizeCurrentRoundData(
+  raw: CurrentRoundDataJson,
+): CurrentRoundData {
   let startedAt: string | undefined;
   const rawStarted = raw.startedAt as unknown;
-  if (typeof rawStarted === 'string') startedAt = rawStarted;
+  if (typeof rawStarted === "string") startedAt = rawStarted;
 
   let timeLimit: number | undefined;
   const rawTl = raw.timeLimit as unknown;
-  if (typeof rawTl === 'number' && Number.isFinite(rawTl) && rawTl > 0) {
+  if (typeof rawTl === "number" && Number.isFinite(rawTl) && rawTl > 0) {
     timeLimit = Math.floor(rawTl);
   }
 
@@ -509,7 +553,10 @@ function buildPlayersFromRoundAndRoom(
 ): Player[] {
   const roundNorm = roundParticipants.map(normalizeRoundParticipant);
   const usedUserIds = new Set<number>();
-  const roomByParticipantId = new Map<number, RoomDetailParticipant | undefined>();
+  const roomByParticipantId = new Map<
+    number,
+    RoomDetailParticipant | undefined
+  >();
 
   const sortedForAssign = [...roundNorm].sort((a, b) => {
     if (a.isHost !== b.isHost) return a.isHost ? -1 : 1;
@@ -523,11 +570,14 @@ function buildPlayersFromRoundAndRoom(
     if (hint) {
       const hk = nicknameKeyForMatch(hint);
       rm = pool.find(
-        (c) => !usedUserIds.has(c.userId) && nicknameKeyForMatch(c.nickname) === hk,
+        (c) =>
+          !usedUserIds.has(c.userId) && nicknameKeyForMatch(c.nickname) === hk,
       );
     }
     if (!rm) {
-      const rest = pool.filter((c) => !usedUserIds.has(c.userId)).sort((a, b) => a.userId - b.userId);
+      const rest = pool
+        .filter((c) => !usedUserIds.has(c.userId))
+        .sort((a, b) => a.userId - b.userId);
       rm = rest[0];
     }
     if (rm) usedUserIds.add(rm.userId);
@@ -540,7 +590,7 @@ function buildPlayersFromRoundAndRoom(
       return {
         id: rp.participantId,
         userId: undefined,
-        nickname: rp.isHost ? '호스트' : `참가자 ${rp.participantId}`,
+        nickname: rp.isHost ? "호스트" : `참가자 ${rp.participantId}`,
         isHost: rp.isHost,
         isAi: false,
         submitted: rp.submitted,
@@ -560,11 +610,13 @@ function buildPlayersFromRoundAndRoom(
 }
 
 /** 라운드 짝 맞춤용: `id`(participantId)·`userId`(로비 단계 id와 동일할 때) 모두 힌트 키로 사용 */
-function participantNicknameHintsFromPlayers(playersSnapshot: readonly Player[]): Map<number, string> {
+function participantNicknameHintsFromPlayers(
+  playersSnapshot: readonly Player[],
+): Map<number, string> {
   const hints = new Map<number, string>();
   for (const p of playersSnapshot) {
     hints.set(p.id, p.nickname);
-    if (typeof p.userId === 'number' && Number.isFinite(p.userId)) {
+    if (typeof p.userId === "number" && Number.isFinite(p.userId)) {
       hints.set(p.userId, p.nickname);
     }
   }
@@ -582,14 +634,16 @@ function mergePlayersKeepSubmitted(prev: Player[], mapped: Player[]): Player[] {
   const prevById = new Map(prev.map((p) => [p.id, p]));
   const prevByUserId = new Map<number, Player>();
   for (const q of prev) {
-    if (typeof q.userId === 'number' && Number.isFinite(q.userId)) {
+    if (typeof q.userId === "number" && Number.isFinite(q.userId)) {
       prevByUserId.set(q.userId, q);
     }
   }
   return mapped.map((p) => {
     const old =
       prevById.get(p.id) ??
-      (typeof p.userId === 'number' && Number.isFinite(p.userId) ? prevByUserId.get(p.userId) : undefined);
+      (typeof p.userId === "number" && Number.isFinite(p.userId)
+        ? prevByUserId.get(p.userId)
+        : undefined);
     return {
       ...p,
       submitted: Boolean(p.submitted),
@@ -602,15 +656,18 @@ function mergePlayersKeepSubmitted(prev: Player[], mapped: Player[]): Player[] {
 function getJwtUserId(token: string | null): number | null {
   if (!token) return null;
   try {
-    const parts = token.split('.');
+    const parts = token.split(".");
     if (parts.length < 2) return null;
     const payloadPart = parts[1]!;
-    const base64 = payloadPart.replace(/-/g, '+').replace(/_/g, '/');
-    const padded = base64 + '='.repeat((4 - (base64.length % 4)) % 4);
+    const base64 = payloadPart.replace(/-/g, "+").replace(/_/g, "/");
+    const padded = base64 + "=".repeat((4 - (base64.length % 4)) % 4);
     const decoded = atob(padded);
-    const payload = JSON.parse(decoded) as { userId?: number; user_id?: number };
+    const payload = JSON.parse(decoded) as {
+      userId?: number;
+      user_id?: number;
+    };
     const id = payload.userId ?? payload.user_id;
-    return typeof id === 'number' ? id : id != null ? Number(id) : null;
+    return typeof id === "number" ? id : id != null ? Number(id) : null;
   } catch {
     return null;
   }
@@ -627,11 +684,11 @@ function computeRoundCountdownEndsAtMs(
   timeLimitOverrideSec?: number | null,
 ): number {
   const tls =
-    typeof timeLimitOverrideSec === 'number' &&
+    typeof timeLimitOverrideSec === "number" &&
     Number.isFinite(timeLimitOverrideSec) &&
     timeLimitOverrideSec > 0
       ? Math.floor(timeLimitOverrideSec)
-      : typeof roundInfo.timeLimit === 'number' &&
+      : typeof roundInfo.timeLimit === "number" &&
           Number.isFinite(roundInfo.timeLimit) &&
           roundInfo.timeLimit > 0
         ? Math.floor(roundInfo.timeLimit)
@@ -639,7 +696,7 @@ function computeRoundCountdownEndsAtMs(
 
   let startedMs: number | null = null;
   const raw =
-    typeof roundInfo.startedAt === 'string' ? roundInfo.startedAt.trim() : '';
+    typeof roundInfo.startedAt === "string" ? roundInfo.startedAt.trim() : "";
   if (raw.length > 0) {
     const p = Date.parse(raw);
     if (Number.isFinite(p)) startedMs = p;
@@ -655,7 +712,7 @@ export default function RoomDetailPage() {
   useEffect(() => {
     routerRef.current = router;
   }, [router]);
-  const roomId = params?.roomId ?? '';
+  const roomId = params?.roomId ?? "";
   const roomIdNumber = Number(roomId);
 
   const [players, setPlayers] = useState<Player[]>([]);
@@ -668,8 +725,8 @@ export default function RoomDetailPage() {
     const ids = players
       .filter((p) => !p.isAi)
       .map((p) => p.userId)
-      .filter((x): x is number => typeof x === 'number' && Number.isFinite(x));
-    return [...new Set(ids)].sort((a, b) => a - b).join(',');
+      .filter((x): x is number => typeof x === "number" && Number.isFinite(x));
+    return [...new Set(ids)].sort((a, b) => a - b).join(",");
   }, [players]);
 
   const hydratePlayerProfileImages = useCallback(async () => {
@@ -679,14 +736,19 @@ export default function RoomDetailPage() {
         list
           .filter((p) => !p.isAi)
           .map((p) => p.userId)
-          .filter((x): x is number => typeof x === 'number' && Number.isFinite(x)),
+          .filter(
+            (x): x is number => typeof x === "number" && Number.isFinite(x),
+          ),
       ),
     ];
     if (ids.length === 0) return;
     const entries = await Promise.all(
       ids.map(async (userId) => {
         try {
-          const u = await apiFetch<{ profileImageUrl: string | null }>(`/api/user/${userId}`, { method: 'GET' });
+          const u = await apiFetch<{ profileImageUrl: string | null }>(
+            `/api/user/${userId}`,
+            { method: "GET" },
+          );
           return [userId, u.profileImageUrl ?? null] as const;
         } catch {
           return [userId, null] as const;
@@ -696,7 +758,7 @@ export default function RoomDetailPage() {
     const byUserId = new Map(entries);
     setPlayers((prev) =>
       prev.map((p) => {
-        if (p.isAi || typeof p.userId !== 'number') return p;
+        if (p.isAi || typeof p.userId !== "number") return p;
         if (!byUserId.has(p.userId)) return p;
         return { ...p, profileImageUrl: byUserId.get(p.userId)! };
       }),
@@ -709,22 +771,27 @@ export default function RoomDetailPage() {
 
   useEffect(() => {
     const onVis = () => {
-      if (document.visibilityState === 'visible') void hydratePlayerProfileImages();
+      if (document.visibilityState === "visible")
+        void hydratePlayerProfileImages();
     };
-    document.addEventListener('visibilitychange', onVis);
-    return () => document.removeEventListener('visibilitychange', onVis);
+    document.addEventListener("visibilitychange", onVis);
+    return () => document.removeEventListener("visibilitychange", onVis);
   }, [hydratePlayerProfileImages]);
 
   const leftPlayers = players.slice(0, 2);
   const rightPlayers = players.slice(2, 4);
 
-  const [participantId, setParticipantId] = useState<string>('');
-  const [roundInfo, setRoundInfo] = useState<RoundStartData | CurrentRoundData | null>(null);
+  const [participantId, setParticipantId] = useState<string>("");
+  const [roundInfo, setRoundInfo] = useState<
+    RoundStartData | CurrentRoundData | null
+  >(null);
   const [submitInfo, setSubmitInfo] = useState<SubmitDrawingData | null>(null);
   const [timeOverSignal, setTimeOverSignal] = useState(0);
   /** RoundStartResponse.timeLimit을 roundId별로 기억해 current-round에도 적용 */
   const roundTimeLimitByRoundIdRef = useRef<Map<number, number>>(new Map());
-  const [roundRemainingSec, setRoundRemainingSec] = useState<number | null>(null);
+  const [roundRemainingSec, setRoundRemainingSec] = useState<number | null>(
+    null,
+  );
   const [roomCapacity, setRoomCapacity] = useState<{
     curPlayers: number;
     maxPlayers: number;
@@ -734,52 +801,75 @@ export default function RoomDetailPage() {
   const [loadingSubmit, setLoadingSubmit] = useState(false);
   const [loadingAiAction, setLoadingAiAction] = useState(false);
   const [leavingRoom, setLeavingRoom] = useState(false);
-  const [error, setError] = useState('');
-  const [roomChatMessages, setRoomChatMessages] = useState<RoomChatLogEntry[]>([]);
-  const [roundEndScoreboard, setRoundEndScoreboard] = useState<RoundEndScoreboardState | null>(null);
-  const [finalRankingBoard, setFinalRankingBoard] = useState<FinalRankingBoardState | null>(null);
+  const [error, setError] = useState("");
+  const [roomChatMessages, setRoomChatMessages] = useState<RoomChatLogEntry[]>(
+    [],
+  );
+  const [roundEndScoreboard, setRoundEndScoreboard] =
+    useState<RoundEndScoreboardState | null>(null);
+  const [finalRankingBoard, setFinalRankingBoard] =
+    useState<FinalRankingBoardState | null>(null);
   /** 라운드 종료 시 STOMP `/ranking`·GET 시드로 갱신되는 누적 승수 랭킹 */
   const [liveRankingRows, setLiveRankingRows] = useState<FinalRankingRow[]>([]);
   /** 방 상세의 participants 스냅샷 — 라운드 결과 AI 뱃지는 제출 닉네임과 여기서만 매칭 */
-  const [lastRoomParticipants, setLastRoomParticipants] = useState<RoomDetailParticipant[]>([]);
+  const [lastRoomParticipants, setLastRoomParticipants] = useState<
+    RoomDetailParticipant[]
+  >([]);
   /** 라운드가 넘어간 뒤 랭킹 패널 하단에 보일 직전 라운드 내 AI 추론·점수 */
   const [myPreviousRoundAiPanel, setMyPreviousRoundAiPanel] = useState<{
     answer: string;
     points: number;
   } | null>(null);
-  const myAiRoundSubmitByRoundIdRef = useRef<Map<number, { points: number; answer: string }>>(new Map());
+  const myAiRoundSubmitByRoundIdRef = useRef<
+    Map<number, { points: number; answer: string }>
+  >(new Map());
   const lastSeenRoundIdForScoreRef = useRef<number | null>(null);
   /** 내가 연속으로 보낸 낙관적 채팅 줄 id — STOMP 에코가 보낸 순서(FIFO)로 하나씩 제거·교체 */
   const pendingOptimisticChatQueueRef = useRef<string[]>([]);
 
-  const roundAdvanceSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const roundAdvanceCountdownIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const roundAdvanceSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
+  const roundAdvanceCountdownIntervalRef = useRef<ReturnType<
+    typeof setInterval
+  > | null>(null);
   const roundAdvanceEndsAtRef = useRef<number | null>(null);
-  const roundTimerIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const roundTimerIntervalRef = useRef<ReturnType<typeof setInterval> | null>(
+    null,
+  );
   /** 개발 모드 Strict Mode에서 effect가 두 번 돌며 join이 동시에 두 번 나가면 백엔드에서 500이 날 수 있음 — 최신 진입만 유효 */
   const roomEnterSeqRef = useRef(0);
-  const [roundAdvanceCountdownSec, setRoundAdvanceCountdownSec] = useState<number | null>(null);
+  const [roundAdvanceCountdownSec, setRoundAdvanceCountdownSec] = useState<
+    number | null
+  >(null);
 
   const clearRoomChatLog = useCallback(() => {
     pendingOptimisticChatQueueRef.current = [];
     setRoomChatMessages([]);
   }, []);
 
-  const appendRoomChatEntry = useCallback((entry: Omit<RoomChatLogEntry, 'id' | 'at'> & { id?: string }) => {
-    const id = entry.id ?? `chat-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-    const at = Date.now();
-    const row: RoomChatLogEntry = {
-      id,
-      at,
-      kind: entry.kind,
-      sender: entry.sender,
-      message: entry.message,
-    };
-    setRoomChatMessages((prev) => {
-      const next = [...prev, row];
-      return next.length > MAX_ROOM_CHAT_MESSAGES ? next.slice(-MAX_ROOM_CHAT_MESSAGES) : next;
-    });
-  }, []);
+  const appendRoomChatEntry = useCallback(
+    (entry: Omit<RoomChatLogEntry, "id" | "at"> & { id?: string }) => {
+      const id =
+        entry.id ??
+        `chat-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+      const at = Date.now();
+      const row: RoomChatLogEntry = {
+        id,
+        at,
+        kind: entry.kind,
+        sender: entry.sender,
+        message: entry.message,
+      };
+      setRoomChatMessages((prev) => {
+        const next = [...prev, row];
+        return next.length > MAX_ROOM_CHAT_MESSAGES
+          ? next.slice(-MAX_ROOM_CHAT_MESSAGES)
+          : next;
+      });
+    },
+    [],
+  );
 
   /** 방 URL이 바뀔 때만 로그 비움 — `roomIdNumber`가 NaN일 때와 구분 */
   useEffect(() => {
@@ -789,17 +879,23 @@ export default function RoomDetailPage() {
     });
   }, [roomId]);
 
-  const refreshRoomParticipantsRef = useRef<() => Promise<void>>(async () => {});
+  const refreshRoomParticipantsRef = useRef<() => Promise<void>>(
+    async () => {},
+  );
 
   const refreshRoomParticipants = useCallback(async () => {
     if (!roomIdNumber) return;
     try {
-      const latest = await apiFetch<RoomDetailData>(`/api/rooms/${roomIdNumber}`);
+      const latest = await apiFetch<RoomDetailData>(
+        `/api/rooms/${roomIdNumber}`,
+      );
       setLastRoomParticipants(latest.participants);
       setRoomCapacity(roomCapacityFromDetail(latest));
       if (roomIsPlaying(latest)) {
         try {
-          const dataRaw = await apiFetch<CurrentRoundDataJson>(`/api/rooms/${roomIdNumber}/rounds/current`);
+          const dataRaw = await apiFetch<CurrentRoundDataJson>(
+            `/api/rooms/${roomIdNumber}/rounds/current`,
+          );
           const data = normalizeCurrentRoundData(dataRaw);
           setRoundInfo(data);
           const hints = participantNicknameHintsFromPlayers(playersRef.current);
@@ -808,7 +904,11 @@ export default function RoomDetailPage() {
             latest.participants,
             hints,
           );
-          const finalized = finalizePlayersForRound(roomIdNumber, data.roundId, mappedPlayers);
+          const finalized = finalizePlayersForRound(
+            roomIdNumber,
+            data.roundId,
+            mappedPlayers,
+          );
           setPlayers((prev) => mergePlayersKeepSubmitted(prev, finalized));
           setSubmitInfo((prev) => {
             const persisted = loadPersistedRoundUi(roomIdNumber);
@@ -820,13 +920,16 @@ export default function RoomDetailPage() {
             }
             return null;
           });
-          const myUid = getJwtUserId(localStorage.getItem('accessToken'));
-          const mine = myUid != null ? finalized.find((pl) => pl.userId === myUid) : undefined;
-          setParticipantId(String(mine?.id ?? finalized[0]?.id ?? ''));
+          const myUid = getJwtUserId(localStorage.getItem("accessToken"));
+          const mine =
+            myUid != null
+              ? finalized.find((pl) => pl.userId === myUid)
+              : undefined;
+          setParticipantId(String(mine?.id ?? finalized[0]?.id ?? ""));
         } catch (inner) {
           const st = getHttpStatus(inner);
           if (st === 403 || st === 404) {
-            routerRef.current.replace('/rooms');
+            routerRef.current.replace("/rooms");
             return;
           }
           setPlayers((prev) =>
@@ -866,12 +969,12 @@ export default function RoomDetailPage() {
             })),
           ),
         );
-        setParticipantId('');
+        setParticipantId("");
       }
     } catch (e) {
       const st = getHttpStatus(e);
       if (st === 404) {
-        routerRef.current.replace('/rooms');
+        routerRef.current.replace("/rooms");
         return;
       }
       /* 그 외 STOMP 동기화 실패는 조용히 무시 */
@@ -893,7 +996,9 @@ export default function RoomDetailPage() {
 
     const endsAt = Date.now() + ROUND_ADVANCE_SYNC_DELAY_MS;
     roundAdvanceEndsAtRef.current = endsAt;
-    setRoundAdvanceCountdownSec(Math.max(1, Math.ceil(ROUND_ADVANCE_SYNC_DELAY_MS / 1000)));
+    setRoundAdvanceCountdownSec(
+      Math.max(1, Math.ceil(ROUND_ADVANCE_SYNC_DELAY_MS / 1000)),
+    );
 
     const tick = () => {
       const end = roundAdvanceEndsAtRef.current;
@@ -940,13 +1045,15 @@ export default function RoomDetailPage() {
       roundTimerIntervalRef.current = null;
     }
 
-    const inProgress = roundInfo?.status === 'IN_PROGRESS' && !submitInfo?.gameFinished;
+    const inProgress =
+      roundInfo?.status === "IN_PROGRESS" && !submitInfo?.gameFinished;
     if (!inProgress || !roundInfo?.roundId) {
       setRoundRemainingSec(null);
       return;
     }
 
-    const cachedTl = roundTimeLimitByRoundIdRef.current.get(roundInfo.roundId) ?? null;
+    const cachedTl =
+      roundTimeLimitByRoundIdRef.current.get(roundInfo.roundId) ?? null;
     const deadline = computeRoundCountdownEndsAtMs(roundInfo, cachedTl);
     const tick = () => {
       const sec = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
@@ -961,18 +1068,19 @@ export default function RoomDetailPage() {
         roundTimerIntervalRef.current = null;
       }
     };
-  }, [
-    roundInfo,
-    submitInfo?.gameFinished,
-  ]);
+  }, [roundInfo, submitInfo?.gameFinished]);
 
   /** 라운드 종료 후 제출 목록 API로 점수판·그림 갤러리 */
   useEffect(() => {
-    if (!submitInfo?.roundFinished || submitInfo.roundWinnerParticipantId == null) return;
+    if (
+      !submitInfo?.roundFinished ||
+      submitInfo.roundWinnerParticipantId == null
+    )
+      return;
     const rid = submitInfo.roundId;
     if (!Number.isFinite(rid) || rid <= 0) return;
 
-    const keyword = roundInfo?.keyword ?? '—';
+    const keyword = roundInfo?.keyword ?? "—";
     const roundNumber = roundInfo?.roundNumber ?? 0;
     const gameFinished = Boolean(submitInfo.gameFinished);
 
@@ -993,7 +1101,10 @@ export default function RoomDetailPage() {
         await new Promise((r) => setTimeout(r, delays[i]!));
         if (cancelled) return [];
         try {
-          const list = await apiFetch<unknown[]>(`/api/rounds/${rid}/submissions`, { method: 'GET' });
+          const list = await apiFetch<unknown[]>(
+            `/api/rounds/${rid}/submissions`,
+            { method: "GET" },
+          );
           return (Array.isArray(list) ? list : [])
             .map(normalizeRoundSubmissionItem)
             .filter((x): x is RoundSubmissionItem => x != null);
@@ -1001,7 +1112,7 @@ export default function RoomDetailPage() {
           /* 다음 재시도 — 트랜잭션 커밋 전 403 등 */
         }
       }
-      throw new Error('제출 목록을 불러오지 못했습니다.');
+      throw new Error("제출 목록을 불러오지 못했습니다.");
     }
 
     void (async () => {
@@ -1009,13 +1120,18 @@ export default function RoomDetailPage() {
         const items = await fetchSubmissions();
         if (cancelled) return;
         setRoundEndScoreboard((prev) =>
-          prev && prev.closedRoundId === rid ? { ...prev, items, loading: false, fetchError: undefined } : prev,
+          prev && prev.closedRoundId === rid
+            ? { ...prev, items, loading: false, fetchError: undefined }
+            : prev,
         );
       } catch (e) {
         if (cancelled) return;
-        const msg = e instanceof Error ? e.message : '제출 목록을 불러오지 못했습니다.';
+        const msg =
+          e instanceof Error ? e.message : "제출 목록을 불러오지 못했습니다.";
         setRoundEndScoreboard((prev) =>
-          prev && prev.closedRoundId === rid ? { ...prev, items: [], loading: false, fetchError: msg } : prev,
+          prev && prev.closedRoundId === rid
+            ? { ...prev, items: [], loading: false, fetchError: msg }
+            : prev,
         );
       }
     })();
@@ -1043,27 +1159,38 @@ export default function RoomDetailPage() {
 
   const onStompPayload = useCallback(
     (dest: RoomStompDestination, body: unknown) => {
-      if (dest === 'ranking') {
+      if (dest === "ranking") {
         const list = Array.isArray(body) ? body : [];
-        const rows = list.map(normalizeRankingRow).filter((x): x is FinalRankingRow => x != null);
+        const rows = list
+          .map(normalizeRankingRow)
+          .filter((x): x is FinalRankingRow => x != null);
         setLiveRankingRows(rows);
         return;
       }
-      if (dest === 'chat') {
+      if (dest === "chat") {
         const c = body as ChatMessageDtoWs;
         const raw = c?.message;
-        const msg = typeof raw === 'string' ? raw.trim() : '';
+        const msg = typeof raw === "string" ? raw.trim() : "";
         if (!msg) return;
-        const sender = (c.sender ?? '').trim();
-        const isNotice = c.type === 'NOTICE' || sender === 'System' || sender.length === 0;
+        const sender = (c.sender ?? "").trim();
+        const isNotice =
+          c.type === "NOTICE" || sender === "System" || sender.length === 0;
         if (isNotice) {
-          const label = sender === 'System' || sender.length === 0 ? '시스템' : '알림';
-          appendRoomChatEntry({ kind: 'NOTICE', sender: label, message: msg });
+          const label =
+            sender === "System" || sender.length === 0 ? "시스템" : "알림";
+          appendRoomChatEntry({ kind: "NOTICE", sender: label, message: msg });
         } else {
-          const senderNorm = (sender || '익명').trim();
-          const myUid = getJwtUserId(typeof window !== 'undefined' ? localStorage.getItem('accessToken') : null);
-          const me = myUid != null ? playersRef.current.find((p) => p.userId === myUid) : undefined;
-          const myNick = (me?.nickname ?? '').trim();
+          const senderNorm = (sender || "익명").trim();
+          const myUid = getJwtUserId(
+            typeof window !== "undefined"
+              ? localStorage.getItem("accessToken")
+              : null,
+          );
+          const me =
+            myUid != null
+              ? playersRef.current.find((p) => p.userId === myUid)
+              : undefined;
+          const myNick = (me?.nickname ?? "").trim();
           const q = pendingOptimisticChatQueueRef.current;
           if (myNick && senderNorm === myNick && q.length > 0) {
             const pendingId = q[0]!;
@@ -1073,45 +1200,57 @@ export default function RoomDetailPage() {
             const row: RoomChatLogEntry = {
               id,
               at,
-              kind: 'TALK',
+              kind: "TALK",
               sender: senderNorm,
               message: msg,
             };
             setRoomChatMessages((prev) => {
               const cut = prev.filter((r) => r.id !== pendingId);
               const next = [...cut, row];
-              return next.length > MAX_ROOM_CHAT_MESSAGES ? next.slice(-MAX_ROOM_CHAT_MESSAGES) : next;
+              return next.length > MAX_ROOM_CHAT_MESSAGES
+                ? next.slice(-MAX_ROOM_CHAT_MESSAGES)
+                : next;
             });
           } else {
-            appendRoomChatEntry({ kind: 'TALK', sender: senderNorm, message: msg });
+            appendRoomChatEntry({
+              kind: "TALK",
+              sender: senderNorm,
+              message: msg,
+            });
           }
         }
         return;
       }
-      if (!body || typeof body !== 'object') return;
+      if (!body || typeof body !== "object") return;
       const o = body as Record<string, unknown>;
       const evt = o.type;
-      if (evt === 'PLAYER_SUBMITTED') {
+      if (evt === "PLAYER_SUBMITTED") {
         const submittedPid = Number(o.participantId);
         const submittedCount = Number(o.submittedCount);
         const totalParticipantCount = Number(o.totalParticipantCount);
         const roundId =
-          typeof o.roundId === 'number'
+          typeof o.roundId === "number"
             ? o.roundId
-            : roundInfo && 'roundId' in roundInfo
+            : roundInfo && "roundId" in roundInfo
               ? roundInfo.roundId
               : 0;
 
         if (Number.isFinite(submittedPid) && submittedPid > 0) {
           setPlayers((prev) =>
-            prev.map((p) => (Number(p.id) === submittedPid ? { ...p, submitted: true } : p)),
+            prev.map((p) =>
+              Number(p.id) === submittedPid ? { ...p, submitted: true } : p,
+            ),
           );
         }
 
-        if (Number.isFinite(submittedCount) && Number.isFinite(totalParticipantCount) && roundId > 0) {
+        if (
+          Number.isFinite(submittedCount) &&
+          Number.isFinite(totalParticipantCount) &&
+          roundId > 0
+        ) {
           setSubmitInfo((prev) => ({
             roundId,
-            submittedAiAnswer: prev?.submittedAiAnswer ?? '',
+            submittedAiAnswer: prev?.submittedAiAnswer ?? "",
             submittedScore: prev?.submittedScore ?? 0,
             submittedCount,
             totalParticipantCount,
@@ -1127,28 +1266,39 @@ export default function RoomDetailPage() {
         }
         return;
       }
-      if (typeof evt === 'string' && ['USER_ENTER', 'USER_LEAVE', 'HOST_CHANGED'].includes(evt)) {
-        if (evt === 'USER_LEAVE') {
+      if (
+        typeof evt === "string" &&
+        ["USER_ENTER", "USER_LEAVE", "HOST_CHANGED"].includes(evt)
+      ) {
+        if (evt === "USER_LEAVE") {
           const leaverId = o.leaverId != null ? Number(o.leaverId) : NaN;
-          const myId = getJwtUserId(typeof window !== 'undefined' ? localStorage.getItem('accessToken') : null);
+          const myId = getJwtUserId(
+            typeof window !== "undefined"
+              ? localStorage.getItem("accessToken")
+              : null,
+          );
           if (Number.isFinite(leaverId) && myId != null && leaverId === myId) {
-            routerRef.current.replace('/rooms');
+            routerRef.current.replace("/rooms");
             return;
           }
         }
         void refreshRoomParticipants();
         return;
       }
-      if (evt === 'TIME_OVER') {
+      if (evt === "TIME_OVER") {
         const payloadRoundId = Number(o.data);
         const activeRoundId = roundInfo?.roundId;
         // 현재 라운드 타임오버일 때만 자동 제출 신호를 올린다.
-        if (!Number.isFinite(payloadRoundId) || !activeRoundId || payloadRoundId === activeRoundId) {
+        if (
+          !Number.isFinite(payloadRoundId) ||
+          !activeRoundId ||
+          payloadRoundId === activeRoundId
+        ) {
           setRoundRemainingSec(0);
           appendRoomChatEntry({
-            kind: 'NOTICE',
-            sender: '알림',
-            message: '제한 시간이 종료되어 현재 그림을 자동 제출합니다.',
+            kind: "NOTICE",
+            sender: "알림",
+            message: "제한 시간이 종료되어 현재 그림을 자동 제출합니다.",
           });
           setTimeOverSignal((v) => v + 1);
         }
@@ -1156,8 +1306,15 @@ export default function RoomDetailPage() {
       }
       const rs = parseStompRoundStartPayload(o, roomIdNumber);
       if (rs) {
-        if (typeof rs.timeLimit === 'number' && Number.isFinite(rs.timeLimit) && rs.timeLimit > 0) {
-          roundTimeLimitByRoundIdRef.current.set(rs.roundId, Math.floor(rs.timeLimit));
+        if (
+          typeof rs.timeLimit === "number" &&
+          Number.isFinite(rs.timeLimit) &&
+          rs.timeLimit > 0
+        ) {
+          roundTimeLimitByRoundIdRef.current.set(
+            rs.roundId,
+            Math.floor(rs.timeLimit),
+          );
         }
         clearPersistedRoundUi(roomIdNumber);
         setRoundInfo(rs);
@@ -1165,7 +1322,10 @@ export default function RoomDetailPage() {
         void refreshRoomParticipants();
         return;
       }
-      if (typeof o.submittedCount === 'number' && typeof o.totalParticipantCount === 'number') {
+      if (
+        typeof o.submittedCount === "number" &&
+        typeof o.totalParticipantCount === "number"
+      ) {
         const data = normalizeWsSubmitDrawing(o);
         setSubmitInfo(data);
         if (data.roundFinished) {
@@ -1185,7 +1345,8 @@ export default function RoomDetailPage() {
     ],
   );
 
-  const stompToken = typeof window !== 'undefined' ? localStorage.getItem('accessToken') : null;
+  const stompToken =
+    typeof window !== "undefined" ? localStorage.getItem("accessToken") : null;
   const { connected: chatConnected, publishChat } = useRoomStomp(
     roomIdNumber,
     Boolean(roomIdNumber && stompToken),
@@ -1197,8 +1358,8 @@ export default function RoomDetailPage() {
   useEffect(() => {
     if (!roomIdNumber) return;
     const timer = window.setInterval(() => {
-      if (document.visibilityState !== 'visible') return;
-      if (roundInfo?.status === 'IN_PROGRESS') return;
+      if (document.visibilityState !== "visible") return;
+      if (roundInfo?.status === "IN_PROGRESS") return;
       void refreshRoomParticipants();
     }, 1200);
 
@@ -1229,19 +1390,25 @@ export default function RoomDetailPage() {
 
     // 방에 입장(참가자로 등록)
     void (async () => {
-      setError('');
+      setError("");
       try {
         // 1) 먼저 방 상세를 가져와서, 이미 내가 참여자인지 확인
         //    (방 생성 시 호스트는 백엔드가 이미 Participant로 넣어주기 때문에 join을 또 호출하면 중복이 생길 수 있음)
-        const roomDetail = await apiFetch<RoomDetailData>(`/api/rooms/${roomIdNumber}`);
+        const roomDetail = await apiFetch<RoomDetailData>(
+          `/api/rooms/${roomIdNumber}`,
+        );
         setRoomCapacity(roomCapacityFromDetail(roomDetail));
         if (isStale()) return;
 
-        const myUserId = getJwtUserId(localStorage.getItem('accessToken'));
-        const alreadyJoined = myUserId != null && roomDetail.participants.some((p) => p.userId === myUserId);
+        const myUserId = getJwtUserId(localStorage.getItem("accessToken"));
+        const alreadyJoined =
+          myUserId != null &&
+          roomDetail.participants.some((p) => p.userId === myUserId);
 
         if (!alreadyJoined && roomIsPlaying(roomDetail)) {
-          setError('이미 게임이 시작된 방입니다. 로비에서 대기 중인 방을 선택해 주세요.');
+          setError(
+            "이미 게임이 시작된 방입니다. 로비에서 대기 중인 방을 선택해 주세요.",
+          );
           return;
         }
 
@@ -1249,7 +1416,7 @@ export default function RoomDetailPage() {
         if (!alreadyJoined) {
           try {
             await apiFetch<unknown>(`/api/rooms/${roomIdNumber}/join`, {
-              method: 'POST',
+              method: "POST",
               body: JSON.stringify({}),
             });
           } catch (joinErr) {
@@ -1258,8 +1425,8 @@ export default function RoomDetailPage() {
               clearAuthSession();
               throw joinErr;
             }
-            const jm = joinErr instanceof Error ? joinErr.message : '';
-            if (!jm.includes('이미 방에 참여') && !jm.includes('400-6')) {
+            const jm = joinErr instanceof Error ? joinErr.message : "";
+            if (!jm.includes("이미 방에 참여") && !jm.includes("400-6")) {
               throw joinErr;
             }
           }
@@ -1267,34 +1434,48 @@ export default function RoomDetailPage() {
         if (isStale()) return;
 
         // 3) 최신 방 상세 — 게임 중이면 현재 라운드까지 불러와 HUD·제출 표시 복원
-        const latest = await apiFetch<RoomDetailData>(`/api/rooms/${roomIdNumber}`);
+        const latest = await apiFetch<RoomDetailData>(
+          `/api/rooms/${roomIdNumber}`,
+        );
         setLastRoomParticipants(latest.participants);
         setRoomCapacity(roomCapacityFromDetail(latest));
         if (isStale()) return;
 
         if (roomIsPlaying(latest)) {
           try {
-            const dataRaw = await apiFetch<CurrentRoundDataJson>(`/api/rooms/${roomIdNumber}/rounds/current`);
+            const dataRaw = await apiFetch<CurrentRoundDataJson>(
+              `/api/rooms/${roomIdNumber}/rounds/current`,
+            );
             if (isStale()) return;
 
             const data = normalizeCurrentRoundData(dataRaw);
             setRoundInfo(data);
-            const hintsJoin = participantNicknameHintsFromPlayers(playersRef.current);
+            const hintsJoin = participantNicknameHintsFromPlayers(
+              playersRef.current,
+            );
             const mappedJoin = buildPlayersFromRoundAndRoom(
               dataRaw.participants,
               latest.participants,
               hintsJoin,
             );
-            const finalizedJoin = finalizePlayersForRound(roomIdNumber, data.roundId, mappedJoin);
-            setPlayers((prev) => mergePlayersKeepSubmitted(prev, finalizedJoin));
+            const finalizedJoin = finalizePlayersForRound(
+              roomIdNumber,
+              data.roundId,
+              mappedJoin,
+            );
+            setPlayers((prev) =>
+              mergePlayersKeepSubmitted(prev, finalizedJoin),
+            );
             const persisted = loadPersistedRoundUi(roomIdNumber);
             if (persisted?.roundId === data.roundId && persisted.submitInfo) {
               setSubmitInfo(persisted.submitInfo);
             }
-            const myUid = getJwtUserId(localStorage.getItem('accessToken'));
+            const myUid = getJwtUserId(localStorage.getItem("accessToken"));
             const mine =
-              myUid != null ? finalizedJoin.find((pl) => pl.userId === myUid) : undefined;
-            setParticipantId(String(mine?.id ?? finalizedJoin[0]?.id ?? ''));
+              myUid != null
+                ? finalizedJoin.find((pl) => pl.userId === myUid)
+                : undefined;
+            setParticipantId(String(mine?.id ?? finalizedJoin[0]?.id ?? ""));
           } catch {
             if (isStale()) return;
 
@@ -1314,7 +1495,7 @@ export default function RoomDetailPage() {
                 })),
               ),
             );
-            setParticipantId('');
+            setParticipantId("");
           }
         } else {
           if (isStale()) return;
@@ -1337,12 +1518,12 @@ export default function RoomDetailPage() {
               })),
             ),
           );
-          setParticipantId('');
+          setParticipantId("");
         }
       } catch (e) {
         if (isStale()) return;
 
-        setError(e instanceof Error ? e.message : '방 입장에 실패했습니다.');
+        setError(e instanceof Error ? e.message : "방 입장에 실패했습니다.");
       }
     })();
 
@@ -1351,33 +1532,40 @@ export default function RoomDetailPage() {
     };
   }, [roomIdNumber, clearRoomChatLog, refreshRoomParticipants]);
 
-  const keyword = roundInfo?.keyword?.trim() ?? '';
+  const keyword = roundInfo?.keyword?.trim() ?? "";
   const roundLabel = useMemo(() => {
-    if (!roundInfo) return '라운드 -';
+    if (!roundInfo) return "라운드 -";
     const total = roomCapacity?.totalRounds;
-    if (total != null && total > 0) return `라운드 ${roundInfo.roundNumber} / ${total}`;
+    if (total != null && total > 0)
+      return `라운드 ${roundInfo.roundNumber} / ${total}`;
     return `라운드 ${roundInfo.roundNumber}`;
   }, [roundInfo, roomCapacity?.totalRounds]);
   const submitLabel = submitInfo
     ? `제출 ${submitInfo.submittedCount} / ${submitInfo.totalParticipantCount}`
-    : '제출 - / -';
-  const statusLabel = roundInfo?.status === 'IN_PROGRESS' ? '진행중' : '대기중';
-  const myUserId = getJwtUserId(typeof window !== 'undefined' ? localStorage.getItem('accessToken') : null);
-  const myPlayer = myUserId != null ? players.find((p) => p.userId === myUserId) : undefined;
+    : "제출 - / -";
+  const statusLabel = roundInfo?.status === "IN_PROGRESS" ? "진행중" : "대기중";
+  const myUserId = getJwtUserId(
+    typeof window !== "undefined" ? localStorage.getItem("accessToken") : null,
+  );
+  const myPlayer =
+    myUserId != null ? players.find((p) => p.userId === myUserId) : undefined;
   const isMyHost = Boolean(myPlayer?.isHost);
   const hasAiPlayer = players.some((p) => p.isAi);
-  const canAddAi = roomCapacity ? roomCapacity.curPlayers < roomCapacity.maxPlayers : true;
-  const isRoomInProgress = roundInfo?.status === 'IN_PROGRESS' && !submitInfo?.gameFinished;
+  const canAddAi = roomCapacity
+    ? roomCapacity.curPlayers < roomCapacity.maxPlayers
+    : true;
+  const isRoomInProgress =
+    roundInfo?.status === "IN_PROGRESS" && !submitInfo?.gameFinished;
 
   useEffect(() => {
-    if (!roundInfo || roundInfo.status !== 'IN_PROGRESS') return;
+    if (!roundInfo || roundInfo.status !== "IN_PROGRESS") return;
     const rid = roundInfo.roundId;
     if (!Number.isFinite(rid) || rid <= 0) return;
     if (!submitInfo?.submittedAiAnswer) return;
     if (submitInfo.roundId !== rid) return;
     if (!myPlayer?.submitted) return;
     const pts = submissionScoreToDisplayPoints(submitInfo.submittedScore);
-    const answer = String(submitInfo.submittedAiAnswer ?? '').trim();
+    const answer = String(submitInfo.submittedAiAnswer ?? "").trim();
     myAiRoundSubmitByRoundIdRef.current.set(rid, { points: pts, answer });
   }, [
     roundInfo?.roundId,
@@ -1395,7 +1583,7 @@ export default function RoomDetailPage() {
       lastSeenRoundIdForScoreRef.current = null;
       return;
     }
-    if (!roundInfo?.roundId || roundInfo.status !== 'IN_PROGRESS') return;
+    if (!roundInfo?.roundId || roundInfo.status !== "IN_PROGRESS") return;
     const cur = roundInfo.roundId;
     const prev = lastSeenRoundIdForScoreRef.current;
     if (prev != null && prev !== cur) {
@@ -1403,7 +1591,7 @@ export default function RoomDetailPage() {
       if (row && Number.isFinite(row.points)) {
         setMyPreviousRoundAiPanel({
           points: row.points,
-          answer: row.answer.trim() || '—',
+          answer: row.answer.trim() || "—",
         });
       } else {
         setMyPreviousRoundAiPanel(null);
@@ -1421,7 +1609,10 @@ export default function RoomDetailPage() {
     let cancelled = false;
     void (async () => {
       try {
-        const list = await apiFetch<unknown[]>(`/api/rooms/${roomIdNumber}/ranking`, { method: 'GET' });
+        const list = await apiFetch<unknown[]>(
+          `/api/rooms/${roomIdNumber}/ranking`,
+          { method: "GET" },
+        );
         if (cancelled) return;
         const rows = (Array.isArray(list) ? list : [])
           .map(normalizeRankingRow)
@@ -1461,35 +1652,38 @@ export default function RoomDetailPage() {
       }
     }
     return [...byUser.values()].sort((a, b) => {
-      if (b.roundWinCount !== a.roundWinCount) return b.roundWinCount - a.roundWinCount;
-      return a.nickname.localeCompare(b.nickname, 'ko');
+      if (b.roundWinCount !== a.roundWinCount)
+        return b.roundWinCount - a.roundWinCount;
+      return a.nickname.localeCompare(b.nickname, "ko");
     });
   }, [liveRankingRows, players]);
 
   const roundTimerLabel =
     roundRemainingSec != null
-      ? `${Math.floor(roundRemainingSec / 60)}:${String(roundRemainingSec % 60).padStart(2, '0')}`
+      ? `${Math.floor(roundRemainingSec / 60)}:${String(roundRemainingSec % 60).padStart(2, "0")}`
       : null;
 
   const gameErrorLine = useMemo(() => (error ? error : null), [error]);
 
   /** 항상 보이는 안내 (진행 단계별 고정 문구) */
   const instructionLine = useMemo(() => {
-    if (roundInfo?.status === 'IN_PROGRESS') {
-      return '제시어에 맞춰 그림을 완성해 주세요.';
+    if (roundInfo?.status === "IN_PROGRESS") {
+      return "제시어에 맞춰 그림을 완성해 주세요.";
     }
-    return '방에 입장했습니다. 호스트가 게임을 시작하면 제시어가 공개됩니다.';
+    return "방에 입장했습니다. 호스트가 게임을 시작하면 제시어가 공개됩니다.";
   }, [roundInfo?.status]);
 
   async function handleLeaveRoom() {
     if (!roomIdNumber) return;
-    if (!window.confirm('이 방에서 나가시겠습니까?')) return;
-    setError('');
+    if (!window.confirm("이 방에서 나가시겠습니까?")) return;
+    setError("");
     setLeavingRoom(true);
     try {
-      await apiFetch<null>(`/api/rooms/${roomIdNumber}/leave`, { method: 'DELETE' });
+      await apiFetch<null>(`/api/rooms/${roomIdNumber}/leave`, {
+        method: "DELETE",
+      });
       clearRoomChatLog();
-      router.replace('/rooms');
+      router.replace("/rooms");
       return;
     } catch (e) {
       const st = getHttpStatus(e);
@@ -1497,45 +1691,56 @@ export default function RoomDetailPage() {
         clearAuthSession();
         clearRoomChatLog();
         // 토큰 만료 상태에서는 leave API도 계속 403이므로, 사용자를 화면에서 먼저 빠져나가게 한다.
-        router.replace(`/login?redirect=${encodeURIComponent(`/rooms/${roomIdNumber}`)}`);
+        router.replace(
+          `/login?redirect=${encodeURIComponent(`/rooms/${roomIdNumber}`)}`,
+        );
         return;
       }
       // 마지막 인원 퇴장 시 방 삭제 타이밍과 겹치면 404/409가 날 수 있다.
       if (st === 404 || st === 409) {
         clearRoomChatLog();
-        router.replace('/rooms');
+        router.replace("/rooms");
         return;
       }
       // 500은 실제 퇴장 실패일 수도 있으므로, 방 상태를 다시 확인해 안전하게 처리한다.
       if (st === 500) {
         try {
-          const latest = await apiFetch<RoomDetailData>(`/api/rooms/${roomIdNumber}`, { method: 'GET' });
-          const myUserId = getJwtUserId(typeof window !== 'undefined' ? localStorage.getItem('accessToken') : null);
-          const stillInRoom = myUserId != null && latest.participants.some((p) => p.userId === myUserId);
+          const latest = await apiFetch<RoomDetailData>(
+            `/api/rooms/${roomIdNumber}`,
+            { method: "GET" },
+          );
+          const myUserId = getJwtUserId(
+            typeof window !== "undefined"
+              ? localStorage.getItem("accessToken")
+              : null,
+          );
+          const stillInRoom =
+            myUserId != null &&
+            latest.participants.some((p) => p.userId === myUserId);
           if (!stillInRoom) {
             clearRoomChatLog();
-            router.replace('/rooms');
+            router.replace("/rooms");
             return;
           }
           // 백엔드에서 AI 포함/게임 진행 중 leave 처리 시 간헐적 500이 발생하는 케이스 완화:
           // 실제로는 방 화면 이탈이 우선이므로 로비로 먼저 이동시킨다.
           if (isRoomInProgress || hasAiPlayer) {
             clearRoomChatLog();
-            router.replace('/rooms');
+            router.replace("/rooms");
             return;
           }
-          setError('방 나가기에 실패했습니다. 잠시 후 다시 시도해 주세요.');
+          setError("방 나가기에 실패했습니다. 잠시 후 다시 시도해 주세요.");
           return;
         } catch (verifyErr) {
           const verifyStatus = getHttpStatus(verifyErr);
           if (verifyStatus === 404) {
             clearRoomChatLog();
-            router.replace('/rooms');
+            router.replace("/rooms");
             return;
           }
         }
       }
-      setError(e instanceof Error ? e.message : '방을 나가지 못했습니다.');
+      setError(e instanceof Error ? e.message : "방을 나가지 못했습니다.");
     } finally {
       setLeavingRoom(false);
     }
@@ -1543,38 +1748,60 @@ export default function RoomDetailPage() {
 
   async function handleStartGame() {
     if (!roomIdNumber) return;
-    setError('');
+    setError("");
     setLoadingStart(true);
     try {
       clearPersistedRoundUi(roomIdNumber);
-      const data = await apiFetch<RoundStartData>(`/api/rooms/${roomIdNumber}/start`, { method: 'POST' });
-      if (typeof data.timeLimit === 'number' && Number.isFinite(data.timeLimit) && data.timeLimit > 0) {
-        roundTimeLimitByRoundIdRef.current.set(data.roundId, Math.floor(data.timeLimit));
+      const data = await apiFetch<RoundStartData>(
+        `/api/rooms/${roomIdNumber}/start`,
+        { method: "POST" },
+      );
+      if (
+        typeof data.timeLimit === "number" &&
+        Number.isFinite(data.timeLimit) &&
+        data.timeLimit > 0
+      ) {
+        roundTimeLimitByRoundIdRef.current.set(
+          data.roundId,
+          Math.floor(data.timeLimit),
+        );
       }
       setRoundInfo(data);
 
       // 시작 직후 현재 라운드를 가져와 참가자/키워드를 UI에 반영
-      const curRaw = await apiFetch<CurrentRoundDataJson>(`/api/rooms/${roomIdNumber}/rounds/current`);
+      const curRaw = await apiFetch<CurrentRoundDataJson>(
+        `/api/rooms/${roomIdNumber}/rounds/current`,
+      );
       const cur = normalizeCurrentRoundData(curRaw);
       setRoundInfo(cur);
-      const latestRoom = await apiFetch<RoomDetailData>(`/api/rooms/${roomIdNumber}`);
+      const latestRoom = await apiFetch<RoomDetailData>(
+        `/api/rooms/${roomIdNumber}`,
+      );
       setLastRoomParticipants(latestRoom.participants);
       setRoomCapacity(roomCapacityFromDetail(latestRoom));
       setSubmitInfo(null);
-      const hintsStart = participantNicknameHintsFromPlayers(playersRef.current);
+      const hintsStart = participantNicknameHintsFromPlayers(
+        playersRef.current,
+      );
       const mappedStart = buildPlayersFromRoundAndRoom(
         curRaw.participants,
         latestRoom.participants,
         hintsStart,
       );
-      const finalizedStart = finalizePlayersForRound(roomIdNumber, cur.roundId, mappedStart);
+      const finalizedStart = finalizePlayersForRound(
+        roomIdNumber,
+        cur.roundId,
+        mappedStart,
+      );
       setPlayers((prev) => mergePlayersKeepSubmitted(prev, finalizedStart));
-      const myUid = getJwtUserId(localStorage.getItem('accessToken'));
+      const myUid = getJwtUserId(localStorage.getItem("accessToken"));
       const mine =
-        myUid != null ? finalizedStart.find((pl) => pl.userId === myUid) : undefined;
-      setParticipantId(String(mine?.id ?? finalizedStart[0]?.id ?? ''));
+        myUid != null
+          ? finalizedStart.find((pl) => pl.userId === myUid)
+          : undefined;
+      setParticipantId(String(mine?.id ?? finalizedStart[0]?.id ?? ""));
     } catch (e) {
-      setError(e instanceof Error ? e.message : '게임 시작에 실패했습니다.');
+      setError(e instanceof Error ? e.message : "게임 시작에 실패했습니다.");
     } finally {
       setLoadingStart(false);
     }
@@ -1582,13 +1809,18 @@ export default function RoomDetailPage() {
 
   async function handleAddAiPlayer() {
     if (!roomIdNumber) return;
-    setError('');
+    setError("");
     setLoadingAiAction(true);
     try {
-      await apiFetch<RoomDetailData>(`/api/rooms/${roomIdNumber}/ai-participants`, { method: 'POST' });
+      await apiFetch<RoomDetailData>(
+        `/api/rooms/${roomIdNumber}/ai-participants`,
+        { method: "POST" },
+      );
       await refreshRoomParticipants();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'AI 참가자 추가에 실패했습니다.');
+      setError(
+        e instanceof Error ? e.message : "AI 참가자 추가에 실패했습니다.",
+      );
     } finally {
       setLoadingAiAction(false);
     }
@@ -1596,13 +1828,18 @@ export default function RoomDetailPage() {
 
   async function handleRemoveAiPlayer() {
     if (!roomIdNumber) return;
-    setError('');
+    setError("");
     setLoadingAiAction(true);
     try {
-      await apiFetch<RoomDetailData>(`/api/rooms/${roomIdNumber}/ai-participants`, { method: 'DELETE' });
+      await apiFetch<RoomDetailData>(
+        `/api/rooms/${roomIdNumber}/ai-participants`,
+        { method: "DELETE" },
+      );
       await refreshRoomParticipants();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'AI 참가자 제거에 실패했습니다.');
+      setError(
+        e instanceof Error ? e.message : "AI 참가자 제거에 실패했습니다.",
+      );
     } finally {
       setLoadingAiAction(false);
     }
@@ -1610,30 +1847,41 @@ export default function RoomDetailPage() {
 
   async function handleSubmitDrawing(imageData: string) {
     if (!roundInfo?.roundId) {
-      setError('먼저 게임이 시작된 뒤에 제출할 수 있습니다.');
+      setError("먼저 게임이 시작된 뒤에 제출할 수 있습니다.");
       return;
     }
 
     const pid = Number(participantId);
     if (!Number.isFinite(pid) || pid <= 0) {
-      setError('내 참가 정보를 찾을 수 없습니다. 페이지를 새로고침한 뒤 다시 시도해 주세요.');
+      setError(
+        "내 참가 정보를 찾을 수 없습니다. 페이지를 새로고침한 뒤 다시 시도해 주세요.",
+      );
       return;
     }
 
-    if (!imageData.startsWith('data:image')) {
-      setError('캔버스 이미지를 만들 수 없습니다. 다시 시도해 주세요.');
+    if (!imageData.startsWith("data:image")) {
+      setError("캔버스 이미지를 만들 수 없습니다. 다시 시도해 주세요.");
       return;
     }
 
-    setError('');
+    setError("");
     setLoadingSubmit(true);
     try {
-      const data = await apiFetch<SubmitDrawingData>(`/api/rounds/${roundInfo.roundId}/submit`, {
-        method: 'POST',
-        body: JSON.stringify({ participantId: pid, imageData }),
-      });
+      const data = await apiFetch<SubmitDrawingData>(
+        `/api/rounds/${roundInfo.roundId}/submit`,
+        {
+          method: "POST",
+          body: JSON.stringify({ participantId: pid, imageData }),
+        },
+      );
       setSubmitInfo(data);
-      patchPersistedAfterSubmit(roomIdNumber, roundInfo.roundId, pid, data, players.map((p) => p.id));
+      patchPersistedAfterSubmit(
+        roomIdNumber,
+        roundInfo.roundId,
+        pid,
+        data,
+        players.map((p) => p.id),
+      );
 
       setPlayers((prev) => {
         let next = prev.map((p) =>
@@ -1648,7 +1896,7 @@ export default function RoomDetailPage() {
         scheduleRoundAdvanceSync();
       }
     } catch (e) {
-      const msg = e instanceof Error ? e.message : '그림 제출에 실패했습니다.';
+      const msg = e instanceof Error ? e.message : "그림 제출에 실패했습니다.";
       setError(msg);
       throw e instanceof Error ? e : new Error(msg);
     } finally {
@@ -1659,15 +1907,26 @@ export default function RoomDetailPage() {
   function handleSendChat(message: string) {
     const trimmed = message.trim();
     if (!trimmed) return;
-    const myNick = myPlayer?.nickname?.trim() || '나';
+    const myNick = myPlayer?.nickname?.trim() || "나";
     const optimisticId = `opt-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-    pendingOptimisticChatQueueRef.current = [...pendingOptimisticChatQueueRef.current, optimisticId];
-    appendRoomChatEntry({ kind: 'TALK', sender: myNick, message: trimmed, id: optimisticId });
+    pendingOptimisticChatQueueRef.current = [
+      ...pendingOptimisticChatQueueRef.current,
+      optimisticId,
+    ];
+    appendRoomChatEntry({
+      kind: "TALK",
+      sender: myNick,
+      message: trimmed,
+      id: optimisticId,
+    });
     const ok = publishChat(trimmed);
     if (!ok) {
-      pendingOptimisticChatQueueRef.current = pendingOptimisticChatQueueRef.current.filter((id) => id !== optimisticId);
+      pendingOptimisticChatQueueRef.current =
+        pendingOptimisticChatQueueRef.current.filter(
+          (id) => id !== optimisticId,
+        );
       setRoomChatMessages((prev) => prev.filter((r) => r.id !== optimisticId));
-      setError('채팅 서버 연결이 불안정합니다. 잠시 후 다시 시도해 주세요.');
+      setError("채팅 서버 연결이 불안정합니다. 잠시 후 다시 시도해 주세요.");
     }
   }
 
@@ -1680,7 +1939,8 @@ export default function RoomDetailPage() {
           advanceCountdownSec={roundAdvanceCountdownSec}
           roomParticipantsSnapshot={lastRoomParticipants}
           winnerFallbackNickname={
-            players.find((p) => p.id === submitInfo?.roundWinnerParticipantId)?.nickname ?? null
+            players.find((p) => p.id === submitInfo?.roundWinnerParticipantId)
+              ?.nickname ?? null
           }
           onClose={({ gameFinished, openFinalRanking }) => {
             setRoundEndScoreboard(null);
@@ -1688,16 +1948,26 @@ export default function RoomDetailPage() {
               setFinalRankingBoard({ loading: true, rows: [] });
               void (async () => {
                 try {
-                  const list = await apiFetch<unknown[]>(`/api/rooms/${roomIdNumber}/ranking`, {
-                    method: 'GET',
-                  });
+                  const list = await apiFetch<unknown[]>(
+                    `/api/rooms/${roomIdNumber}/ranking`,
+                    {
+                      method: "GET",
+                    },
+                  );
                   const rows = (Array.isArray(list) ? list : [])
                     .map(normalizeRankingRow)
                     .filter((x): x is FinalRankingRow => x != null);
                   setFinalRankingBoard({ loading: false, rows });
                 } catch (e) {
-                  const msg = e instanceof Error ? e.message : '랭킹을 불러오지 못했습니다.';
-                  setFinalRankingBoard({ loading: false, rows: [], fetchError: msg });
+                  const msg =
+                    e instanceof Error
+                      ? e.message
+                      : "랭킹을 불러오지 못했습니다.";
+                  setFinalRankingBoard({
+                    loading: false,
+                    rows: [],
+                    fetchError: msg,
+                  });
                 }
               })();
             }
@@ -1705,7 +1975,10 @@ export default function RoomDetailPage() {
         />
       ) : null}
       {finalRankingBoard ? (
-        <FinalRankingOverlay board={finalRankingBoard} onClose={() => setFinalRankingBoard(null)} />
+        <FinalRankingOverlay
+          board={finalRankingBoard}
+          onClose={() => setFinalRankingBoard(null)}
+        />
       ) : null}
       {isRoomInProgress && !roundEndScoreboard ? (
         <LiveRankingSystemPanel
@@ -1726,7 +1999,11 @@ export default function RoomDetailPage() {
           isMyHost={isMyHost}
           hasAiPlayer={hasAiPlayer}
           aiActionDisabled={
-            loadingAiAction || leavingRoom || loadingStart || isRoomInProgress || (!hasAiPlayer && !canAddAi)
+            loadingAiAction ||
+            leavingRoom ||
+            loadingStart ||
+            isRoomInProgress ||
+            (!hasAiPlayer && !canAddAi)
           }
           onAddAi={handleAddAiPlayer}
           onRemoveAi={handleRemoveAiPlayer}
@@ -1746,8 +2023,11 @@ export default function RoomDetailPage() {
           >
             <span className="h-2 w-2 animate-pulse rounded-full bg-cyan-300" />
             <p className="text-sm font-semibold text-cyan-100 sm:text-base">
-              다음 라운드(또는 로비)로 넘어가기까지{' '}
-              <span className="font-black tabular-nums text-white">{roundAdvanceCountdownSec}</span>초
+              다음 라운드(또는 로비)로 넘어가기까지{" "}
+              <span className="font-black tabular-nums text-white">
+                {roundAdvanceCountdownSec}
+              </span>
+              초
             </p>
           </div>
         ) : null}
@@ -1793,7 +2073,9 @@ function RoundEndScoreboardOverlay({
   onClose: (opts: { gameFinished: boolean; openFinalRanking: boolean }) => void;
 }) {
   const winnerName =
-    board.items.find((x) => x.winner)?.nickname ?? winnerFallbackNickname ?? '라운드 우승';
+    board.items.find((x) => x.winner)?.nickname ??
+    winnerFallbackNickname ??
+    "라운드 우승";
 
   return (
     <div
@@ -1803,65 +2085,77 @@ function RoundEndScoreboardOverlay({
       aria-labelledby="round-scoreboard-title"
     >
       <div className="max-h-[min(92vh,880px)] w-full max-w-4xl overflow-y-auto rounded-[1.75rem] border border-white/15 bg-slate-900/95 p-5 shadow-2xl sm:p-8">
-            <div className="mb-6 text-center">
-              <p className="text-xs font-bold uppercase tracking-[0.2em] text-blue-300/90">라운드 결과</p>
-              <h2 id="round-scoreboard-title" className="mt-2 text-2xl font-black text-white sm:text-3xl">
-                라운드{' '}
-                {board.roundNumber}
-                {typeof totalRounds === 'number' && totalRounds > 0 ? (
-                  <span className="font-bold text-slate-400">/{totalRounds}</span>
-                ) : null}
-                <span className="mx-2 text-slate-500">·</span>
-                <span className="bg-gradient-to-r from-cyan-200 to-violet-200 bg-clip-text text-transparent">
-                  {board.keyword}
-                </span>
-              </h2>
-              <p className="mt-4 text-lg font-bold text-amber-200">
-                우승 <span className="text-white">{winnerName}</span> 님
-              </p>
-              {board.gameFinished ? (
-                <p className="mt-2 text-sm text-slate-400">
-                  게임이 종료되었습니다. 이 창을 닫으면 오른쪽 랭킹 패널에서 누적 순위를 다시 볼 수 있고, 전체
-                  표는 아래 버튼으로 열 수 있습니다.
-                </p>
-              ) : null}
-              {advanceCountdownSec != null && advanceCountdownSec > 0 ? (
-                <p className="mt-3 text-sm font-semibold text-cyan-200">
-                  화면 전환까지{' '}
-                  <span className="font-black tabular-nums text-white">{advanceCountdownSec}</span>초
-                </p>
-              ) : null}
-            </div>
+        <div className="mb-6 text-center">
+          <p className="text-xs font-bold uppercase tracking-[0.2em] text-blue-300/90">
+            라운드 결과
+          </p>
+          <h2
+            id="round-scoreboard-title"
+            className="mt-2 text-2xl font-black text-white sm:text-3xl"
+          >
+            라운드 {board.roundNumber}
+            {typeof totalRounds === "number" && totalRounds > 0 ? (
+              <span className="font-bold text-slate-400">/{totalRounds}</span>
+            ) : null}
+            <span className="mx-2 text-slate-500">·</span>
+            <span className="bg-gradient-to-r from-cyan-200 to-violet-200 bg-clip-text text-transparent">
+              {board.keyword}
+            </span>
+          </h2>
+          <p className="mt-4 text-lg font-bold text-amber-200">
+            우승 <span className="text-white">{winnerName}</span> 님
+          </p>
+          {board.gameFinished ? (
+            <p className="mt-2 text-sm text-slate-400">
+              게임이 종료되었습니다. 이 창을 닫으면 오른쪽 랭킹 패널에서 누적
+              순위를 다시 볼 수 있고, 전체 표는 아래 버튼으로 열 수 있습니다.
+            </p>
+          ) : null}
+          {advanceCountdownSec != null && advanceCountdownSec > 0 ? (
+            <p className="mt-3 text-sm font-semibold text-cyan-200">
+              화면 전환까지{" "}
+              <span className="font-black tabular-nums text-white">
+                {advanceCountdownSec}
+              </span>
+              초
+            </p>
+          ) : null}
+        </div>
 
-            {board.loading ? (
-              <div className="flex flex-col items-center justify-center gap-3 py-16 text-slate-400">
-                <div className="h-10 w-10 animate-spin rounded-full border-2 border-white/20 border-t-blue-400" />
-                <p className="text-sm font-medium">제출 그림·점수를 불러오는 중…</p>
-              </div>
-            ) : board.fetchError ? (
-              <p className="rounded-2xl border border-rose-500/30 bg-rose-500/10 px-4 py-6 text-center text-sm text-rose-200">
-                {board.fetchError}
-              </p>
-            ) : (
-              <div className="grid gap-4 sm:grid-cols-2">
-                {board.items.map((item) => (
-                  (() => {
-                    const imageSrc = resolveSubmissionImageSrc(item.imageData);
-                    const displayPts = submissionScoreToDisplayPoints(item.score);
-                    return (
+        {board.loading ? (
+          <div className="flex flex-col items-center justify-center gap-3 py-16 text-slate-400">
+            <div className="h-10 w-10 animate-spin rounded-full border-2 border-white/20 border-t-blue-400" />
+            <p className="text-sm font-medium">제출 그림·점수를 불러오는 중…</p>
+          </div>
+        ) : board.fetchError ? (
+          <p className="rounded-2xl border border-rose-500/30 bg-rose-500/10 px-4 py-6 text-center text-sm text-rose-200">
+            {board.fetchError}
+          </p>
+        ) : (
+          <div className="grid gap-4 sm:grid-cols-2">
+            {board.items.map((item) =>
+              (() => {
+                const imageSrc = resolveSubmissionImageSrc(item.imageData);
+                const displayPts = submissionScoreToDisplayPoints(item.score);
+                return (
                   <div
                     key={item.participantId}
                     className={`overflow-hidden rounded-2xl border bg-slate-950/60 shadow-lg ${
                       item.winner
-                        ? 'border-amber-400/50 ring-2 ring-amber-400/25'
-                        : 'border-white/10'
+                        ? "border-amber-400/50 ring-2 ring-amber-400/25"
+                        : "border-white/10"
                     }`}
                     aria-label={`${item.nickname}, ${displayPts}점`}
                   >
                     <div className="flex items-center justify-between gap-2 border-b border-white/10 px-3 py-2.5 sm:px-4 sm:py-3">
                       <div className="flex min-w-0 flex-1 items-center gap-2">
-                        <span className="truncate text-base font-bold text-white sm:text-lg">{item.nickname}</span>
-                        {submissionNicknameIsAiInRoom(item.nickname, roomParticipantsSnapshot) ? (
+                        <span className="truncate text-base font-bold text-white sm:text-lg">
+                          {item.nickname}
+                        </span>
+                        {submissionNicknameIsAiInRoom(
+                          item.nickname,
+                          roomParticipantsSnapshot,
+                        ) ? (
                           <span className="shrink-0 rounded-full border border-violet-400/45 bg-violet-500/20 px-2 py-0.5 text-[10px] font-black uppercase tracking-wide text-violet-100">
                             AI
                           </span>
@@ -1881,19 +2175,23 @@ function RoundEndScoreboardOverlay({
                           className="h-full w-full object-contain"
                         />
                       ) : (
-                        <div className="flex h-full items-center justify-center text-sm text-slate-500">이미지 없음</div>
+                        <div className="flex h-full items-center justify-center text-sm text-slate-500">
+                          이미지 없음
+                        </div>
                       )}
                       <div
                         className={`pointer-events-none absolute bottom-2 right-2 rounded-xl border px-2.5 py-1.5 shadow-lg backdrop-blur-sm sm:bottom-3 sm:right-3 sm:px-3 sm:py-2 ${
                           item.winner
-                            ? 'border-amber-400/40 bg-slate-950/88'
-                            : 'border-white/20 bg-slate-950/88'
+                            ? "border-amber-400/40 bg-slate-950/88"
+                            : "border-white/20 bg-slate-950/88"
                         }`}
                       >
-                        <p className="text-[9px] font-bold uppercase tracking-wider text-slate-400">점수</p>
+                        <p className="text-[9px] font-bold uppercase tracking-wider text-slate-400">
+                          점수
+                        </p>
                         <p
                           className={`text-lg font-black tabular-nums sm:text-xl ${
-                            item.winner ? 'text-amber-200' : 'text-cyan-200'
+                            item.winner ? "text-amber-200" : "text-cyan-200"
                           }`}
                         >
                           {displayPts}점
@@ -1910,34 +2208,41 @@ function RoundEndScoreboardOverlay({
                         AI 추론 결과
                       </p>
                       <p className="mt-1.5 break-words text-base font-bold leading-snug text-white sm:text-lg">
-                        {item.aiAnswer.trim() || '—'}
+                        {item.aiAnswer.trim() || "—"}
                       </p>
                     </div>
                   </div>
-                    );
-                  })()
-                ))}
-              </div>
+                );
+              })(),
             )}
+          </div>
+        )}
 
-            <div className="mt-8 flex flex-col items-stretch justify-center gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-center">
-              {board.gameFinished ? (
-                <button
-                  type="button"
-                  onClick={() => onClose({ gameFinished: true, openFinalRanking: true })}
-                  className="rounded-2xl bg-gradient-to-r from-amber-500 to-orange-500 px-8 py-3 text-sm font-black text-slate-950 shadow-lg transition hover:from-amber-400 hover:to-orange-400"
-                >
-                  최종 순위 전체 보기
-                </button>
-              ) : null}
-              <button
-                type="button"
-                onClick={() => onClose({ gameFinished: board.gameFinished, openFinalRanking: false })}
-                className="rounded-2xl border border-white/20 bg-white/5 px-8 py-3 text-sm font-bold text-slate-200 transition hover:bg-white/10"
-              >
-                닫기
-              </button>
-            </div>
+        <div className="mt-8 flex flex-col items-stretch justify-center gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-center">
+          {board.gameFinished ? (
+            <button
+              type="button"
+              onClick={() =>
+                onClose({ gameFinished: true, openFinalRanking: true })
+              }
+              className="rounded-2xl bg-gradient-to-r from-amber-500 to-orange-500 px-8 py-3 text-sm font-black text-slate-950 shadow-lg transition hover:from-amber-400 hover:to-orange-400"
+            >
+              최종 순위 전체 보기
+            </button>
+          ) : null}
+          <button
+            type="button"
+            onClick={() =>
+              onClose({
+                gameFinished: board.gameFinished,
+                openFinalRanking: false,
+              })
+            }
+            className="rounded-2xl border border-white/20 bg-white/5 px-8 py-3 text-sm font-bold text-slate-200 transition hover:bg-white/10"
+          >
+            닫기
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -1951,14 +2256,19 @@ function FinalRankingOverlay({
   onClose: () => void;
 }) {
   /** API의 isWinner가 둘 다 true로 올 수 있어, 화면은 라운드 승수 최댓값으로만 공동 우승 판별 */
-  const maxRoundWins = board.rows.reduce((m, r) => Math.max(m, r.roundWinCount), 0);
-  const podium = board.rows.filter((r) => r.roundWinCount === maxRoundWins && maxRoundWins > 0);
+  const maxRoundWins = board.rows.reduce(
+    (m, r) => Math.max(m, r.roundWinCount),
+    0,
+  );
+  const podium = board.rows.filter(
+    (r) => r.roundWinCount === maxRoundWins && maxRoundWins > 0,
+  );
   const headline =
     maxRoundWins === 0
-      ? '—'
+      ? "—"
       : podium.length === 1
         ? `${podium[0]!.nickname} 님`
-        : `${podium.map((w) => w.nickname).join(' · ')} (공동 우승)`;
+        : `${podium.map((w) => w.nickname).join(" · ")} (공동 우승)`;
 
   return (
     <div
@@ -1969,12 +2279,19 @@ function FinalRankingOverlay({
     >
       <div className="w-full max-w-lg overflow-hidden rounded-[1.75rem] border border-amber-400/20 bg-slate-900/95 shadow-2xl ring-1 ring-amber-400/10 sm:max-w-xl">
         <div className="border-b border-white/10 bg-gradient-to-r from-amber-500/20 via-violet-500/15 to-cyan-500/15 px-6 py-6 text-center">
-          <p className="text-xs font-bold uppercase tracking-[0.25em] text-amber-200/90">게임 종료</p>
-          <h2 id="final-ranking-title" className="mt-2 text-2xl font-black text-white sm:text-3xl">
+          <p className="text-xs font-bold uppercase tracking-[0.25em] text-amber-200/90">
+            게임 종료
+          </p>
+          <h2
+            id="final-ranking-title"
+            className="mt-2 text-2xl font-black text-white sm:text-3xl"
+          >
             최종 우승
           </h2>
           <p className="mt-3 text-lg font-bold text-white">
-            <span className="bg-gradient-to-r from-amber-200 to-yellow-100 bg-clip-text text-transparent">{headline}</span>
+            <span className="bg-gradient-to-r from-amber-200 to-yellow-100 bg-clip-text text-transparent">
+              {headline}
+            </span>
           </p>
         </div>
 
@@ -1989,13 +2306,21 @@ function FinalRankingOverlay({
               {board.fetchError}
             </p>
           ) : board.rows.length === 0 ? (
-            <p className="py-8 text-center text-sm text-slate-400">표시할 순위가 없습니다.</p>
+            <p className="py-8 text-center text-sm text-slate-400">
+              표시할 순위가 없습니다.
+            </p>
           ) : (
             <ol className="space-y-2">
               {board.rows.map((row, index) => {
                 const rank = index + 1;
                 const medal =
-                  rank === 1 ? '🥇' : rank === 2 ? '🥈' : rank === 3 ? '🥉' : `${rank}`;
+                  rank === 1
+                    ? "🥇"
+                    : rank === 2
+                      ? "🥈"
+                      : rank === 3
+                        ? "🥉"
+                        : `${rank}`;
                 const isChampion =
                   maxRoundWins > 0 && row.roundWinCount === maxRoundWins;
                 return (
@@ -2003,15 +2328,21 @@ function FinalRankingOverlay({
                     key={row.userId}
                     className={`flex items-center justify-between gap-3 rounded-2xl border px-4 py-3.5 ${
                       isChampion
-                        ? 'border-amber-400/40 bg-amber-500/10 ring-1 ring-amber-400/20'
-                        : 'border-white/10 bg-slate-950/50'
+                        ? "border-amber-400/40 bg-amber-500/10 ring-1 ring-amber-400/20"
+                        : "border-white/10 bg-slate-950/50"
                     }`}
                   >
                     <div className="flex min-w-0 flex-1 items-center gap-3">
-                      <span className="w-8 shrink-0 text-center text-lg">{medal}</span>
+                      <span className="w-8 shrink-0 text-center text-lg">
+                        {medal}
+                      </span>
                       <div className="min-w-0">
-                        <p className="truncate font-bold text-white">{row.nickname}</p>
-                        <p className="text-xs text-slate-500">라운드 {row.roundWinCount}승</p>
+                        <p className="truncate font-bold text-white">
+                          {row.nickname}
+                        </p>
+                        <p className="text-xs text-slate-500">
+                          라운드 {row.roundWinCount}승
+                        </p>
                       </div>
                     </div>
                     <div className="shrink-0 text-right">
@@ -2020,7 +2351,9 @@ function FinalRankingOverlay({
                           우승
                         </span>
                       ) : (
-                        <span className="text-sm font-semibold text-slate-400">{row.roundWinCount}승</span>
+                        <span className="text-sm font-semibold text-slate-400">
+                          {row.roundWinCount}승
+                        </span>
                       )}
                     </div>
                   </li>
@@ -2066,16 +2399,20 @@ function LiveRankingSystemPanel({
       <div className="pointer-events-auto rounded-2xl border border-amber-400/25 bg-slate-950/90 p-3 shadow-xl backdrop-blur-md">
         <div className="flex items-start justify-between gap-2 border-b border-white/10 pb-2">
           <div>
-            <p className="text-[10px] font-black uppercase tracking-[0.2em] text-amber-200/90">라운드별</p>
+            <p className="text-[10px] font-black uppercase tracking-[0.2em] text-amber-200/90">
+              라운드별
+            </p>
             <h2 className="text-sm font-black text-white">랭킹</h2>
           </div>
           <span
             className={`mt-0.5 shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold ${
-              stompConnected ? 'bg-emerald-500/15 text-emerald-200' : 'bg-slate-600/40 text-slate-400'
+              stompConnected
+                ? "bg-emerald-500/15 text-emerald-200"
+                : "bg-slate-600/40 text-slate-400"
             }`}
-            title={stompConnected ? '실시간 랭킹 채널 연결됨' : '연결 대기 중'}
+            title={stompConnected ? "실시간 랭킹 채널 연결됨" : "연결 대기 중"}
           >
-            {stompConnected ? 'LIVE' : '…'}
+            {stompConnected ? "LIVE" : "…"}
           </span>
         </div>
         <ol className="mt-2 max-h-[min(48vh,380px)] space-y-1.5 overflow-y-auto pr-0.5">
@@ -2095,9 +2432,13 @@ function LiveRankingSystemPanel({
                     <span className="w-6 shrink-0 text-center text-xs font-black text-amber-200/90 tabular-nums">
                       {rank}
                     </span>
-                    <span className="truncate font-semibold text-slate-100">{row.nickname}</span>
+                    <span className="truncate font-semibold text-slate-100">
+                      {row.nickname}
+                    </span>
                   </span>
-                  <span className="shrink-0 text-xs font-bold tabular-nums text-cyan-200">{row.roundWinCount}승</span>
+                  <span className="shrink-0 text-xs font-bold tabular-nums text-cyan-200">
+                    {row.roundWinCount}승
+                  </span>
                 </li>
               );
             })
@@ -2108,15 +2449,24 @@ function LiveRankingSystemPanel({
             외 {totalListed - LIVE_RANKING_PANEL_MAX}명 · 스크롤로 앞 순위 확인
           </p>
         ) : totalListed > 0 ? (
-          <p className="mt-1.5 text-center text-[10px] text-slate-500">총 {totalListed}명 기준 순위</p>
+          <p className="mt-1.5 text-center text-[10px] text-slate-500">
+            총 {totalListed}명 기준 순위
+          </p>
         ) : null}
         {previousRoundAi ? (
           <div className="mt-2.5 border-t border-white/10 pt-2.5">
-            <p className="text-[10px] font-black uppercase tracking-[0.2em] text-amber-200/90">이전 라운드</p>
-            <p className="mt-1.5 text-[11px] font-semibold leading-snug text-slate-300">
-              AI 추론 결과: <span className="font-bold text-white">{previousRoundAi.answer}</span>
+            <p className="text-[10px] font-black uppercase tracking-[0.2em] text-amber-200/90">
+              이전 라운드
             </p>
-            <p className="mt-1 text-sm font-black tabular-nums text-cyan-200">{previousRoundAi.points}점</p>
+            <p className="mt-1.5 text-[11px] font-semibold leading-snug text-slate-300">
+              AI 추론 결과:{" "}
+              <span className="font-bold text-white">
+                {previousRoundAi.answer}
+              </span>
+            </p>
+            <p className="mt-1 text-sm font-black tabular-nums text-cyan-200">
+              {previousRoundAi.points}점
+            </p>
           </div>
         ) : null}
       </div>
@@ -2165,14 +2515,23 @@ function TopHud({
         <div className="flex flex-wrap items-center gap-3 xl:min-w-0">
           <InfoChip label={`방 #${roomId}`} />
           <InfoChip label={roundLabel} />
-          <InfoChip label={statusLabel} tone={statusLabel === '진행중' ? 'green' : 'default'} />
+          <InfoChip
+            label={statusLabel}
+            tone={statusLabel === "진행중" ? "green" : "default"}
+          />
           <InfoChip label={submitLabel} tone="blue" />
         </div>
 
-        <div className="flex shrink-0 justify-center xl:px-2" role="timer" aria-live="polite">
+        <div
+          className="flex shrink-0 justify-center xl:px-2"
+          role="timer"
+          aria-live="polite"
+        >
           {roundTimerLabel ? (
             <div className="rounded-2xl border border-cyan-300/40 bg-cyan-500/10 px-5 py-2.5 text-center shadow-lg shadow-cyan-500/5 sm:py-3">
-              <p className="text-[10px] font-black uppercase tracking-[0.24em] text-cyan-200 sm:text-[11px]">남은 시간</p>
+              <p className="text-[10px] font-black uppercase tracking-[0.24em] text-cyan-200 sm:text-[11px]">
+                남은 시간
+              </p>
               <p className="mt-0.5 text-3xl font-black tabular-nums tracking-tight text-cyan-100 sm:text-4xl">
                 {roundTimerLabel}
               </p>
@@ -2188,7 +2547,11 @@ function TopHud({
               disabled={aiActionDisabled}
               className="rounded-2xl border border-violet-300/30 bg-violet-500/10 px-5 py-3 text-sm font-bold text-violet-100 transition hover:bg-violet-500/20 disabled:opacity-50"
             >
-              {loadingAiAction ? '처리 중...' : hasAiPlayer ? 'AI 제거' : 'AI 추가'}
+              {loadingAiAction
+                ? "처리 중..."
+                : hasAiPlayer
+                  ? "AI 제거"
+                  : "AI 추가"}
             </button>
           ) : null}
           <button
@@ -2197,7 +2560,7 @@ function TopHud({
             disabled={leavingRoom || loadingStart}
             className="rounded-2xl border border-white/20 bg-white/5 px-5 py-3 text-sm font-bold text-slate-200 transition hover:border-rose-400/40 hover:bg-rose-500/10 hover:text-rose-100 disabled:opacity-50"
           >
-            {leavingRoom ? '나가는 중...' : '로비로 나가기'}
+            {leavingRoom ? "나가는 중..." : "로비로 나가기"}
           </button>
           {showStartButton ? (
             <button
@@ -2206,7 +2569,7 @@ function TopHud({
               disabled={loadingStart || leavingRoom}
               className="rounded-2xl bg-gradient-to-r from-blue-500 to-violet-500 px-5 py-3 text-sm font-black text-white shadow-lg shadow-blue-500/20 transition hover:from-blue-400 hover:to-violet-400 disabled:opacity-50"
             >
-              {loadingStart ? '시작 중...' : '게임 시작'}
+              {loadingStart ? "시작 중..." : "게임 시작"}
             </button>
           ) : null}
         </div>
@@ -2217,20 +2580,22 @@ function TopHud({
 
 function InfoChip({
   label,
-  tone = 'default',
+  tone = "default",
 }: {
   label: string;
-  tone?: 'default' | 'green' | 'blue' | 'violet';
+  tone?: "default" | "green" | "blue" | "violet";
 }) {
   const className = {
-    default: 'border-white/10 bg-slate-950/70 text-slate-200',
-    green: 'border-emerald-400/30 bg-emerald-500/10 text-emerald-300',
-    blue: 'border-blue-400/30 bg-blue-500/10 text-blue-300',
-    violet: 'border-violet-400/35 bg-violet-500/10 text-violet-200',
+    default: "border-white/10 bg-slate-950/70 text-slate-200",
+    green: "border-emerald-400/30 bg-emerald-500/10 text-emerald-300",
+    blue: "border-blue-400/30 bg-blue-500/10 text-blue-300",
+    violet: "border-violet-400/35 bg-violet-500/10 text-violet-200",
   }[tone];
 
   return (
-    <span className={`inline-flex shrink-0 items-center rounded-2xl border px-5 py-3 text-sm font-bold ${className}`}>
+    <span
+      className={`inline-flex shrink-0 items-center rounded-2xl border px-5 py-3 text-sm font-bold ${className}`}
+    >
       {label}
     </span>
   );
@@ -2252,8 +2617,8 @@ function PlayerCard({ player }: { player: Player }) {
     <div
       className={`rounded-[1.75rem] border p-5 shadow-xl backdrop-blur ${
         isAi
-          ? 'border-violet-400/35 bg-gradient-to-b from-violet-950/50 to-slate-900/75'
-          : 'border-white/10 bg-slate-900/70'
+          ? "border-violet-400/35 bg-gradient-to-b from-violet-950/50 to-slate-900/75"
+          : "border-white/10 bg-slate-900/70"
       }`}
     >
       <div className="flex flex-col items-center text-center">
@@ -2261,15 +2626,15 @@ function PlayerCard({ player }: { player: Player }) {
           <div
             className={`relative flex h-20 w-20 shrink-0 items-center justify-center overflow-hidden rounded-full border text-2xl font-black text-white shadow-[0_0_30px_rgba(59,130,246,0.18)] ${
               isAi
-                ? 'border-violet-400/50 bg-gradient-to-br from-violet-600/90 to-fuchsia-900/80 shadow-[0_0_28px_rgba(139,92,246,0.35)]'
-                : 'border-blue-400/30 bg-gradient-to-br from-[#0b1c3f] to-[#081122]'
+                ? "border-violet-400/50 bg-gradient-to-br from-violet-600/90 to-fuchsia-900/80 shadow-[0_0_28px_rgba(139,92,246,0.35)]"
+                : "border-blue-400/30 bg-gradient-to-br from-[#0b1c3f] to-[#081122]"
             }`}
           >
             {isAi ? (
-              '◇'
+              "◇"
             ) : (
               <ProfileImage
-                key={`${player.userId ?? player.id}-${player.profileImageUrl ?? ''}`}
+                key={`${player.userId ?? player.id}-${player.profileImageUrl ?? ""}`}
                 src={player.profileImageUrl}
                 alt={`${player.nickname} 프로필`}
                 className="absolute inset-0 h-full w-full object-cover"
@@ -2278,13 +2643,15 @@ function PlayerCard({ player }: { player: Player }) {
           </div>
           <span
             className={`absolute bottom-1 right-1 h-4 w-4 rounded-full ${
-              player.submitted ? 'bg-emerald-300' : 'bg-amber-300'
+              player.submitted ? "bg-emerald-300" : "bg-amber-300"
             }`}
           />
         </div>
 
         <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
-          <h3 className="text-2xl font-black tracking-tight text-white">{player.nickname}</h3>
+          <h3 className="text-2xl font-black tracking-tight text-white">
+            {player.nickname}
+          </h3>
           {isAi && (
             <span className="rounded-full border border-violet-400/40 bg-violet-500/20 px-2 py-1 text-[11px] font-black uppercase tracking-wide text-violet-200">
               AI
@@ -2297,15 +2664,17 @@ function PlayerCard({ player }: { player: Player }) {
           )}
         </div>
 
-        <p className="mt-2 text-sm text-slate-400">라운드 승리 {player.roundWinCount}회</p>
+        <p className="mt-2 text-sm text-slate-400">
+          라운드 승리 {player.roundWinCount}회
+        </p>
 
         <div className="mt-5 w-full rounded-2xl bg-slate-950/80 px-4 py-4">
           <p
             className={`text-base font-black ${
-              player.submitted ? 'text-emerald-300' : 'text-amber-300'
+              player.submitted ? "text-emerald-300" : "text-amber-300"
             }`}
           >
-            {player.submitted ? '제출 완료' : '그리는 중'}
+            {player.submitted ? "제출 완료" : "그리는 중"}
           </p>
         </div>
       </div>
@@ -2313,18 +2682,18 @@ function PlayerCard({ player }: { player: Player }) {
   );
 }
 
-type BrushKind = 'pen' | 'highlighter' | 'eraser' | 'fill';
+type BrushKind = "pen" | "highlighter" | "eraser" | "fill";
 
 const PALETTE = [
-  { name: '검정', color: '#171717' },
-  { name: '빨강', color: '#ef4444' },
-  { name: '파랑', color: '#2563eb' },
-  { name: '초록', color: '#22c55e' },
-  { name: '노랑', color: '#eab308' },
-  { name: '주황', color: '#f97316' },
-  { name: '보라', color: '#a855f7' },
-  { name: '갈색', color: '#92400e' },
-  { name: '회색', color: '#64748b' },
+  { name: "검정", color: "#171717" },
+  { name: "빨강", color: "#ef4444" },
+  { name: "파랑", color: "#2563eb" },
+  { name: "초록", color: "#22c55e" },
+  { name: "노랑", color: "#eab308" },
+  { name: "주황", color: "#f97316" },
+  { name: "보라", color: "#a855f7" },
+  { name: "갈색", color: "#92400e" },
+  { name: "회색", color: "#64748b" },
 ] as const;
 
 function GameBoard({
@@ -2356,20 +2725,22 @@ function GameBoard({
   myAlreadySubmitted: boolean;
 }) {
   const canvasRef = useRef<DrawingCanvasHandle>(null);
-  const [brush, setBrush] = useState<BrushKind>('pen');
+  const [brush, setBrush] = useState<BrushKind>("pen");
   const [strokeColor, setStrokeColor] = useState<string>(PALETTE[0].color);
   const [lineWidth, setLineWidth] = useState(8);
-  const [chatInput, setChatInput] = useState('');
+  const [chatInput, setChatInput] = useState("");
   const chatScrollRef = useRef<HTMLDivElement>(null);
   /** SSR·하이드레이션 첫 페인트와 DOM을 맞추기 위해 클라이언트 마운트 후에만 body 포털을 연다. */
   const [chatPortalMounted, setChatPortalMounted] = useState(false);
   const [submitConfirmOpen, setSubmitConfirmOpen] = useState(false);
   const submitConfirmLockRef = useRef(false);
   const lastTimeOverSignalRef = useRef(0);
-  const isFill = brush === 'fill';
-  const isEraser = brush === 'eraser';
-  const isHighlighter = brush === 'highlighter';
-  const effectiveLineWidth = isHighlighter ? Math.round(lineWidth * 1.8) : lineWidth;
+  const isFill = brush === "fill";
+  const isEraser = brush === "eraser";
+  const isHighlighter = brush === "highlighter";
+  const effectiveLineWidth = isHighlighter
+    ? Math.round(lineWidth * 1.8)
+    : lineWidth;
   const effectiveOpacity = isHighlighter ? 0.35 : 1;
 
   useEffect(() => {
@@ -2402,8 +2773,8 @@ function GameBoard({
     const onKeyDown = (e: KeyboardEvent) => {
       const isTyping =
         e.target instanceof HTMLElement &&
-        (e.target.tagName === 'INPUT' ||
-          e.target.tagName === 'TEXTAREA' ||
+        (e.target.tagName === "INPUT" ||
+          e.target.tagName === "TEXTAREA" ||
           e.target.isContentEditable);
       if (isTyping) return;
 
@@ -2411,7 +2782,7 @@ function GameBoard({
       if (!meta) return;
 
       const key = e.key.toLowerCase();
-      if (key === 'z') {
+      if (key === "z") {
         e.preventDefault();
         if (e.shiftKey) {
           canvasRef.current?.redo();
@@ -2420,13 +2791,13 @@ function GameBoard({
         }
         return;
       }
-      if (key === 'y') {
+      if (key === "y") {
         e.preventDefault();
         canvasRef.current?.redo();
       }
     };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
   function handleClearCanvas() {
@@ -2436,7 +2807,7 @@ function GameBoard({
   function handleSubmitClick() {
     const api = canvasRef.current;
     if (!api?.getHasDrawing()) {
-      setError('캔버스에 그림을 그린 뒤 제출해 주세요.');
+      setError("캔버스에 그림을 그린 뒤 제출해 주세요.");
       return;
     }
     setSubmitConfirmOpen(true);
@@ -2447,11 +2818,11 @@ function GameBoard({
     const api = canvasRef.current;
     if (!api?.getHasDrawing()) {
       setSubmitConfirmOpen(false);
-      setError('캔버스에 그림을 그린 뒤 제출해 주세요.');
+      setError("캔버스에 그림을 그린 뒤 제출해 주세요.");
       return;
     }
     submitConfirmLockRef.current = true;
-    setError('');
+    setError("");
     // 확인 후에는 모달을 닫고, 버튼 인라인 로딩만 노출한다.
     setSubmitConfirmOpen(false);
     try {
@@ -2467,7 +2838,7 @@ function GameBoard({
     const text = chatInput.trim();
     if (!text) return;
     onSendChat(text);
-    setChatInput('');
+    setChatInput("");
   }
 
   return (
@@ -2480,7 +2851,9 @@ function GameBoard({
                 <p className="text-[10px] font-black uppercase tracking-[0.28em] text-blue-200 sm:text-[11px] sm:tracking-[0.3em]">
                   제시어
                 </p>
-                <p className="mt-0.5 text-2xl font-black tracking-tight text-white sm:mt-1 sm:text-3xl">{keyword}</p>
+                <p className="mt-0.5 text-2xl font-black tracking-tight text-white sm:mt-1 sm:text-3xl">
+                  {keyword}
+                </p>
               </div>
             </div>
           ) : null}
@@ -2488,16 +2861,26 @@ function GameBoard({
           <div className="flex w-full flex-col items-center gap-2 sm:gap-3">
             {errorLine ? (
               <div className="max-w-[min(100%,32rem)] rounded-2xl border border-rose-400/35 bg-rose-500/10 px-4 py-3 text-center sm:px-5 sm:py-3.5">
-                <p className="text-sm font-semibold leading-relaxed text-rose-100">{errorLine}</p>
+                <p className="text-sm font-semibold leading-relaxed text-rose-100">
+                  {errorLine}
+                </p>
               </div>
             ) : null}
-            <p className="max-w-[520px] text-center text-sm leading-relaxed text-slate-300">{instructionLine}</p>
+            <p className="max-w-[520px] text-center text-sm leading-relaxed text-slate-300">
+              {instructionLine}
+            </p>
             <div className="flex flex-wrap items-center justify-center gap-2 sm:gap-3">
               <div className="rounded-2xl border border-white/10 bg-slate-950/50 px-4 py-2 text-sm font-bold text-slate-200">
                 사이즈 {lineWidth}px
               </div>
               <div className="rounded-2xl border border-white/10 bg-slate-950/50 px-4 py-2 text-sm font-bold text-slate-200">
-                {isFill ? '채우기' : isEraser ? '지우개' : isHighlighter ? '형광펜' : '펜'}
+                {isFill
+                  ? "채우기"
+                  : isEraser
+                    ? "지우개"
+                    : isHighlighter
+                      ? "형광펜"
+                      : "펜"}
               </div>
             </div>
           </div>
@@ -2507,7 +2890,7 @@ function GameBoard({
           <div className="mx-auto flex w-full justify-center px-0.5">
             <DrawingCanvas
               ref={canvasRef}
-              strokeColor={isEraser ? '#ffffff' : strokeColor}
+              strokeColor={isEraser ? "#ffffff" : strokeColor}
               lineWidth={effectiveLineWidth}
               isEraser={isEraser}
               isFill={isFill}
@@ -2537,67 +2920,96 @@ function GameBoard({
               <div
                 className="pointer-events-none"
                 style={{
-                  position: 'fixed',
-                  left: '16px',
-                  bottom: '16px',
+                  position: "fixed",
+                  left: "16px",
+                  bottom: "16px",
                   zIndex: 45,
-                  width: 'min(560px, calc(100vw - 32px))',
-                  maxWidth: 'calc(100vw - 32px)',
+                  width: "min(560px, calc(100vw - 32px))",
+                  maxWidth: "calc(100vw - 32px)",
                 }}
               >
                 <div
                   className="pointer-events-auto"
                   style={{
-                    height: '312px',
-                    display: 'grid',
-                    gridTemplateRows: '1fr auto',
-                    rowGap: '8px',
-                    overflow: 'hidden',
+                    height: "312px",
+                    display: "grid",
+                    gridTemplateRows: "1fr auto",
+                    rowGap: "8px",
+                    overflow: "hidden",
                   }}
                 >
                   <div
                     className="rounded-xl border bg-slate-950/40"
                     style={{
                       minHeight: 0,
-                      overflow: 'hidden',
-                      borderColor: 'rgba(51, 65, 85, 0.56)',
+                      overflow: "hidden",
+                      borderColor: "rgba(51, 65, 85, 0.56)",
                     }}
                     aria-label="방 채팅 로그"
                   >
                     <div
                       ref={chatScrollRef}
                       className="h-full space-y-1.5 px-3 py-2 text-left text-sm"
-                      style={{ overflowY: 'auto' }}
+                      style={{ overflowY: "auto" }}
                     >
                       {chatMessages.length === 0 ? (
-                        <p className="py-4 text-center text-xs text-slate-500">아직 메시지가 없습니다.</p>
+                        <p className="py-4 text-center text-xs text-slate-500">
+                          아직 메시지가 없습니다.
+                        </p>
                       ) : (
                         chatMessages.map((row) => {
-                          const timeStr = new Date(row.at).toLocaleTimeString('ko-KR', {
-                            hour: '2-digit',
-                            minute: '2-digit',
-                            second: '2-digit',
-                          });
+                          const timeStr = new Date(row.at).toLocaleTimeString(
+                            "ko-KR",
+                            {
+                              hour: "2-digit",
+                              minute: "2-digit",
+                              second: "2-digit",
+                            },
+                          );
                           const moderated =
-                            row.kind === 'TALK' &&
-                            (row.message.includes('[AI 검열') ||
-                              row.message.includes('[부적절') ||
-                              row.message === '****');
-                          if (row.kind === 'NOTICE') {
+                            row.kind === "TALK" &&
+                            (row.message.includes("[AI 검열") ||
+                              row.message.includes("[부적절") ||
+                              row.message === "****");
+                          if (row.kind === "NOTICE") {
                             return (
-                              <div key={row.id} className="rounded-lg bg-slate-800/60 px-2 py-1.5 text-xs leading-relaxed">
-                                <span className="font-mono text-[10px] text-slate-500">{timeStr}</span>{' '}
-                                <span className="font-bold text-amber-200/90">{row.sender}</span>{' '}
-                                <span className="text-slate-300">{row.message}</span>
+                              <div
+                                key={row.id}
+                                className="rounded-lg bg-slate-800/60 px-2 py-1.5 text-xs leading-relaxed"
+                              >
+                                <span className="font-mono text-[10px] text-slate-500">
+                                  {timeStr}
+                                </span>{" "}
+                                <span className="font-bold text-amber-200/90">
+                                  {row.sender}
+                                </span>{" "}
+                                <span className="text-slate-300">
+                                  {row.message}
+                                </span>
                               </div>
                             );
                           }
                           return (
-                            <div key={row.id} className="rounded-lg px-2 py-1 leading-snug hover:bg-white/[0.04]">
-                              <span className="font-mono text-[10px] text-slate-500">{timeStr}</span>{' '}
-                              <span className="font-bold text-violet-200">{row.sender}</span>
+                            <div
+                              key={row.id}
+                              className="rounded-lg px-2 py-1 leading-snug hover:bg-white/[0.04]"
+                            >
+                              <span className="font-mono text-[10px] text-slate-500">
+                                {timeStr}
+                              </span>{" "}
+                              <span className="font-bold text-violet-200">
+                                {row.sender}
+                              </span>
                               <span className="text-slate-400">: </span>
-                              <span className={moderated ? 'text-amber-100/95' : 'text-slate-100'}>{row.message}</span>
+                              <span
+                                className={
+                                  moderated
+                                    ? "text-amber-100/95"
+                                    : "text-slate-100"
+                                }
+                              >
+                                {row.message}
+                              </span>
                             </div>
                           );
                         })
@@ -2605,14 +3017,16 @@ function GameBoard({
                     </div>
                   </div>
                   <div className="shrink-0 flex items-center gap-2 rounded-xl bg-slate-950/60 p-2.5">
-                    <span className={`text-xs font-semibold ${chatConnected ? 'text-emerald-300' : 'text-slate-400'}`}>
-                      {chatConnected ? '채팅 연결됨' : '채팅 연결 중...'}
+                    <span
+                      className={`text-xs font-semibold ${chatConnected ? "text-emerald-300" : "text-slate-400"}`}
+                    >
+                      {chatConnected ? "채팅 연결됨" : "채팅 연결 중..."}
                     </span>
                     <input
                       value={chatInput}
                       onChange={(e) => setChatInput(e.target.value)}
                       onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
+                        if (e.key === "Enter") {
                           e.preventDefault();
                           handleSendChatClick();
                         }
@@ -2620,7 +3034,7 @@ function GameBoard({
                       maxLength={200}
                       placeholder="메시지를 입력한 뒤 전송하면 위 로그에 표시됩니다"
                       className="min-w-0 flex-1 rounded-lg border bg-slate-900/70 px-3 py-2 text-sm text-white outline-none placeholder:text-slate-500"
-                      style={{ borderColor: 'rgba(51, 65, 85, 0.62)' }}
+                      style={{ borderColor: "rgba(51, 65, 85, 0.62)" }}
                     />
                     <button
                       type="button"
@@ -2641,7 +3055,7 @@ function GameBoard({
         <ConfirmModal
           title="그림 제출"
           description="정말 제출할까요? 제출 후에는 수정할 수 없습니다."
-          confirmLabel={loadingSubmit ? '제출 중…' : '제출하기'}
+          confirmLabel={loadingSubmit ? "제출 중…" : "제출하기"}
           cancelLabel="취소"
           busy={loadingSubmit}
           disabled={loadingSubmit}
@@ -2685,23 +3099,23 @@ function DrawingToolbar({
   /** 제출 중 도구 조작 비활성화(자동 제출 등 모달 없이 진행될 때) */
   interactionLocked: boolean;
 }) {
-  const [openHelp, setOpenHelp] = useState<null | 'undo' | 'redo'>(null);
+  const [openHelp, setOpenHelp] = useState<null | "undo" | "redo">(null);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setOpenHelp(null);
+      if (e.key === "Escape") setOpenHelp(null);
     };
     const onPointerDown = (e: PointerEvent) => {
       const t = e.target as HTMLElement | null;
       if (!t) return;
-      if (t.closest('[data-help-popover-root]')) return;
+      if (t.closest("[data-help-popover-root]")) return;
       setOpenHelp(null);
     };
-    window.addEventListener('keydown', onKeyDown);
-    window.addEventListener('pointerdown', onPointerDown);
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("pointerdown", onPointerDown);
     return () => {
-      window.removeEventListener('keydown', onKeyDown);
-      window.removeEventListener('pointerdown', onPointerDown);
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("pointerdown", onPointerDown);
     };
   }, []);
 
@@ -2712,33 +3126,33 @@ function DrawingToolbar({
           <div className="flex flex-wrap items-center gap-3">
             <ToolButton
               ariaLabel="펜"
-              active={brush === 'pen'}
+              active={brush === "pen"}
               disabled={interactionLocked}
-              onClick={() => onBrushChange('pen')}
+              onClick={() => onBrushChange("pen")}
             >
               <PenToolIcon className="h-5 w-5" />
             </ToolButton>
             <ToolButton
               ariaLabel="형광펜"
-              active={brush === 'highlighter'}
+              active={brush === "highlighter"}
               disabled={interactionLocked}
-              onClick={() => onBrushChange('highlighter')}
+              onClick={() => onBrushChange("highlighter")}
             >
               <HighlighterToolIcon className="h-5 w-5" />
             </ToolButton>
             <ToolButton
               ariaLabel="지우개"
-              active={brush === 'eraser'}
+              active={brush === "eraser"}
               disabled={interactionLocked}
-              onClick={() => onBrushChange('eraser')}
+              onClick={() => onBrushChange("eraser")}
             >
               <EraserToolIcon className="h-5 w-5" />
             </ToolButton>
             <ToolButton
               ariaLabel="채우기"
-              active={brush === 'fill'}
+              active={brush === "fill"}
               disabled={interactionLocked}
-              onClick={() => onBrushChange('fill')}
+              onClick={() => onBrushChange("fill")}
             >
               <FillToolIcon className="h-5 w-5" />
             </ToolButton>
@@ -2751,7 +3165,9 @@ function DrawingToolbar({
                 disabled={interactionLocked}
                 onClick={() => onStrokeColorChange(p.color)}
                 className={`h-8 w-8 rounded-full border transition disabled:opacity-40 ${
-                  strokeColor === p.color ? 'border-white ring-2 ring-white/30' : 'border-white/15'
+                  strokeColor === p.color
+                    ? "border-white ring-2 ring-white/30"
+                    : "border-white/15"
                 }`}
                 style={{ backgroundColor: p.color }}
                 aria-label={`색상 ${p.name}`}
@@ -2759,7 +3175,7 @@ function DrawingToolbar({
             ))}
             <label
               className={`ml-1 flex items-center gap-2 rounded-2xl border border-white/10 bg-slate-900/60 px-3 py-2 text-xs font-bold text-slate-200 ${
-                interactionLocked ? 'pointer-events-none opacity-40' : ''
+                interactionLocked ? "pointer-events-none opacity-40" : ""
               }`}
             >
               커스텀
@@ -2774,7 +3190,9 @@ function DrawingToolbar({
             </label>
           </div>
           <div className="flex items-center gap-2 rounded-2xl border border-white/10 bg-slate-900/60 px-3 py-2">
-            <span className="shrink-0 text-xs font-bold text-slate-400">사이즈</span>
+            <span className="shrink-0 text-xs font-bold text-slate-400">
+              사이즈
+            </span>
             <input
               type="range"
               min={2}
@@ -2786,18 +3204,28 @@ function DrawingToolbar({
               className="h-2 w-[min(100%,140px)] cursor-pointer accent-blue-500 disabled:cursor-not-allowed sm:w-32"
               aria-label="사이즈"
             />
-            <span className="w-10 shrink-0 text-right font-mono text-xs font-bold text-slate-200">{lineWidth}px</span>
+            <span className="w-10 shrink-0 text-right font-mono text-xs font-bold text-slate-200">
+              {lineWidth}px
+            </span>
           </div>
           <div className="flex items-center gap-2 rounded-2xl border border-white/10 bg-slate-900/60 px-3 py-2">
-            <span className="shrink-0 text-xs font-bold text-slate-400">미리보기</span>
+            <span className="shrink-0 text-xs font-bold text-slate-400">
+              미리보기
+            </span>
             <div className="h-6 w-24 rounded-lg bg-white/90" aria-hidden="true">
               <div
                 className="mx-auto mt-[11px] rounded-full"
                 style={{
-                  width: '80%',
+                  width: "80%",
                   height: Math.max(2, Math.round(lineWidth / 2)),
-                  backgroundColor: brush === 'fill' ? strokeColor : brush === 'eraser' ? '#e2e8f0' : strokeColor,
-                  opacity: brush === 'fill' ? 1 : brush === 'highlighter' ? 0.35 : 1,
+                  backgroundColor:
+                    brush === "fill"
+                      ? strokeColor
+                      : brush === "eraser"
+                        ? "#e2e8f0"
+                        : strokeColor,
+                  opacity:
+                    brush === "fill" ? 1 : brush === "highlighter" ? 0.35 : 1,
                 }}
               />
             </div>
@@ -2806,7 +3234,10 @@ function DrawingToolbar({
 
         <div className="flex flex-wrap items-center gap-3">
           <div className="inline-flex flex-nowrap items-center gap-2">
-            <div className="relative inline-flex items-center gap-1.5" data-help-popover-root>
+            <div
+              className="relative inline-flex items-center gap-1.5"
+              data-help-popover-root
+            >
               <button
                 type="button"
                 onClick={onUndo}
@@ -2817,21 +3248,29 @@ function DrawingToolbar({
               </button>
               <button
                 type="button"
-                onClick={() => setOpenHelp((prev) => (prev === 'undo' ? null : 'undo'))}
+                onClick={() =>
+                  setOpenHelp((prev) => (prev === "undo" ? null : "undo"))
+                }
                 className="inline-flex h-6 w-6 items-center justify-center rounded-full border border-white/10 bg-white/5 text-[11px] font-black text-slate-200 transition hover:bg-white/10"
                 aria-label="실행 취소 도움말 열기"
               >
                 ?
               </button>
-              {openHelp === 'undo' ? (
+              {openHelp === "undo" ? (
                 <HelpPopover
                   title="실행 취소"
-                  lines={['방금 그린 내용을 1단계 되돌립니다.', '단축키: Ctrl+Z (Mac: ⌘Z)']}
+                  lines={[
+                    "방금 그린 내용을 1단계 되돌립니다.",
+                    "단축키: Ctrl+Z (Mac: ⌘Z)",
+                  ]}
                 />
               ) : null}
             </div>
 
-            <div className="relative inline-flex items-center gap-1.5" data-help-popover-root>
+            <div
+              className="relative inline-flex items-center gap-1.5"
+              data-help-popover-root
+            >
               <button
                 type="button"
                 onClick={onRedo}
@@ -2842,18 +3281,20 @@ function DrawingToolbar({
               </button>
               <button
                 type="button"
-                onClick={() => setOpenHelp((prev) => (prev === 'redo' ? null : 'redo'))}
+                onClick={() =>
+                  setOpenHelp((prev) => (prev === "redo" ? null : "redo"))
+                }
                 className="inline-flex h-6 w-6 items-center justify-center rounded-full border border-white/10 bg-white/5 text-[11px] font-black text-slate-200 transition hover:bg-white/10"
                 aria-label="다시 실행 도움말 열기"
               >
                 ?
               </button>
-              {openHelp === 'redo' ? (
+              {openHelp === "redo" ? (
                 <HelpPopover
                   title="다시 실행"
                   lines={[
-                    '되돌린 내용을 다시 적용합니다.',
-                    '단축키: Ctrl+Y 또는 Ctrl+Shift+Z (Mac: ⌘⇧Z)',
+                    "되돌린 내용을 다시 적용합니다.",
+                    "단축키: Ctrl+Y 또는 Ctrl+Shift+Z (Mac: ⌘⇧Z)",
                   ]}
                 />
               ) : null}
@@ -2884,7 +3325,7 @@ function DrawingToolbar({
                 제출 중…
               </span>
             ) : (
-              '그림 제출'
+              "그림 제출"
             )}
           </button>
         </div>
@@ -2997,8 +3438,8 @@ function ToolButton({
       title={ariaLabel}
       className={`inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl transition disabled:opacity-45 ${
         active
-          ? 'bg-blue-500 text-white shadow-md shadow-blue-500/25'
-          : 'border border-white/10 bg-slate-900/60 text-slate-200 hover:bg-slate-800/60 hover:border-blue-300/30'
+          ? "bg-blue-500 text-white shadow-md shadow-blue-500/25"
+          : "border border-white/10 bg-slate-900/60 text-slate-200 hover:bg-slate-800/60 hover:border-blue-300/30"
       }`}
     >
       {children}
@@ -3018,7 +3459,9 @@ function HelpPopover({ title, lines }: { title: string; lines: string[] }) {
           </li>
         ))}
       </ul>
-      <p className="mt-2 text-[11px] text-slate-500">팁: ESC 또는 바깥 클릭으로 닫을 수 있어요.</p>
+      <p className="mt-2 text-[11px] text-slate-500">
+        팁: ESC 또는 바깥 클릭으로 닫을 수 있어요.
+      </p>
     </div>
   );
 }
@@ -3026,7 +3469,7 @@ function HelpPopover({ title, lines }: { title: string; lines: string[] }) {
 function SpinnerRing({ className }: { className?: string }) {
   return (
     <span
-      className={`inline-block shrink-0 animate-spin rounded-full border-[3px] border-white/25 border-t-cyan-200 ${className ?? 'h-8 w-8'}`}
+      className={`inline-block shrink-0 animate-spin rounded-full border-[3px] border-white/25 border-t-cyan-200 ${className ?? "h-8 w-8"}`}
       aria-hidden
     />
   );
@@ -3053,13 +3496,13 @@ function ConfirmModal({
 }) {
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
+      if (e.key === "Escape") {
         if (busy) return;
         onCancel();
       }
     };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
   }, [busy, onCancel]);
 
   return (
@@ -3067,26 +3510,29 @@ function ConfirmModal({
       className="fixed inset-0 z-[95] flex items-center justify-center bg-slate-950/75 p-4 backdrop-blur-[3px]"
       role="dialog"
       aria-modal="true"
-      aria-busy={busy ? 'true' : undefined}
+      aria-busy={busy ? "true" : undefined}
       aria-label={title}
       onClick={() => {
         if (!busy) onCancel();
       }}
     >
       <div
-        className={`w-full max-w-sm rounded-2xl border border-white/10 bg-slate-900/95 p-5 shadow-2xl ${busy ? 'ring-2 ring-cyan-400/30' : ''}`}
+        className={`w-full max-w-sm rounded-2xl border border-white/10 bg-slate-900/95 p-5 shadow-2xl ${busy ? "ring-2 ring-cyan-400/30" : ""}`}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0 flex-1">
             <p className="text-sm font-black text-white">{title}</p>
             {!busy ? (
-              <p className="mt-2 text-sm leading-relaxed text-slate-300">{description}</p>
+              <p className="mt-2 text-sm leading-relaxed text-slate-300">
+                {description}
+              </p>
             ) : (
               <div className="mt-5 flex flex-col items-center gap-4 pb-1 pt-2">
                 <SpinnerRing className="h-10 w-10 border-[3px]" />
                 <p className="text-center text-sm leading-relaxed text-slate-400">
-                  이미지를 업로드하고 있어요. 네트워크에 따라 잠시 걸릴 수 있어요.
+                  이미지를 업로드하고 있어요. 네트워크에 따라 잠시 걸릴 수
+                  있어요.
                 </p>
               </div>
             )}

@@ -1,20 +1,20 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from "next/server";
 
 function getBackendBaseUrl() {
-  return process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:8080';
+  return process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8080";
 }
 
-function buildBackendUrl(pathParts: string[], search = '') {
-  const path = pathParts.join('/');
+function buildBackendUrl(pathParts: string[], search = "") {
+  const path = pathParts.join("/");
   const base = getBackendBaseUrl();
   return `${base}/${path}${search}`;
 }
 
 function filterForwardHeaders(headers: Headers) {
   // hop-by-hop/불필요 헤더 제거
-  headers.delete('host');
-  headers.delete('connection');
-  headers.delete('content-length');
+  headers.delete("host");
+  headers.delete("connection");
+  headers.delete("content-length");
   return headers;
 }
 
@@ -27,7 +27,7 @@ export async function GET(
   const url = buildBackendUrl(pathParts, req.nextUrl.search);
 
   const res = await fetch(url, {
-    method: 'GET',
+    method: "GET",
     headers: filterForwardHeaders(new Headers(req.headers)),
   });
 
@@ -52,7 +52,7 @@ export async function POST(
   filterForwardHeaders(headers);
 
   const res = await fetch(url, {
-    method: 'POST',
+    method: "POST",
     headers,
     body,
   });
@@ -75,7 +75,7 @@ export async function DELETE(
   filterForwardHeaders(headers);
 
   const res = await fetch(url, {
-    method: 'DELETE',
+    method: "DELETE",
     headers,
   });
 
@@ -97,7 +97,7 @@ export async function PUT(
   filterForwardHeaders(headers);
 
   const res = await fetch(url, {
-    method: 'PUT',
+    method: "PUT",
     headers,
     body,
   });
@@ -120,7 +120,7 @@ export async function PATCH(
   filterForwardHeaders(headers);
 
   const res = await fetch(url, {
-    method: 'PATCH',
+    method: "PATCH",
     headers,
     body,
   });
@@ -130,4 +130,3 @@ export async function PATCH(
     headers: res.headers,
   });
 }
-

@@ -1,13 +1,15 @@
-'use client';
+"use client";
 
-import { Client, type IMessage } from '@stomp/stompjs';
-import SockJS from 'sockjs-client';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { Client, type IMessage } from "@stomp/stompjs";
+import SockJS from "sockjs-client";
+import { useCallback, useEffect, useRef, useState } from "react";
 
-export type RoomStompDestination = 'room' | 'chat' | 'ranking';
+export type RoomStompDestination = "room" | "chat" | "ranking";
 
 function sockJsUrl(): string {
-  const base = (process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:8080').replace(/\/$/, '');
+  const base = (
+    process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8080"
+  ).replace(/\/$/, "");
   return `${base}/ws-draw`;
 }
 
@@ -46,7 +48,7 @@ export function useRoomStomp(
           } catch {
             /* 그대로 문자열 */
           }
-          onPayloadRef.current('room', body);
+          onPayloadRef.current("room", body);
         });
         client.subscribe(`/sub/rooms/${roomId}/chat`, (message: IMessage) => {
           let body: unknown = message.body;
@@ -55,25 +57,28 @@ export function useRoomStomp(
           } catch {
             /* 그대로 */
           }
-          onPayloadRef.current('chat', body);
+          onPayloadRef.current("chat", body);
         });
-        client.subscribe(`/sub/rooms/${roomId}/ranking`, (message: IMessage) => {
-          let body: unknown = message.body;
-          try {
-            body = JSON.parse(message.body);
-          } catch {
-            /* 그대로 */
-          }
-          onPayloadRef.current('ranking', body);
-        });
+        client.subscribe(
+          `/sub/rooms/${roomId}/ranking`,
+          (message: IMessage) => {
+            let body: unknown = message.body;
+            try {
+              body = JSON.parse(message.body);
+            } catch {
+              /* 그대로 */
+            }
+            onPayloadRef.current("ranking", body);
+          },
+        );
       },
       onStompError: (frame) => {
         setConnected(false);
-        console.warn('[STOMP]', frame.headers?.message ?? frame.body);
+        console.warn("[STOMP]", frame.headers?.message ?? frame.body);
       },
       onWebSocketError: () => {
         setConnected(false);
-        console.warn('[STOMP] websocket error');
+        console.warn("[STOMP] websocket error");
       },
       onWebSocketClose: () => {
         setConnected(false);

@@ -3,8 +3,8 @@ export function isUnauthorizedStatus(status: number | undefined): boolean {
 }
 
 export function clearAuthSession() {
-  if (typeof window === 'undefined') return;
-  localStorage.removeItem('accessToken');
-  localStorage.removeItem('refreshToken');
-  window.dispatchEvent(new Event('auth-changed'));
+  if (typeof window === "undefined") return;
+  localStorage.removeItem("accessToken");
+  localStorage.removeItem("refreshToken");
+  window.dispatchEvent(new Event("auth-changed"));
 }

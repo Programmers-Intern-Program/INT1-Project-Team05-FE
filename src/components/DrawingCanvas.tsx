@@ -1,4 +1,4 @@
-'use client';
+"use client";
 
 import {
   forwardRef,
@@ -9,7 +9,7 @@ import {
   useRef,
   useState,
   type PointerEvent,
-} from 'react';
+} from "react";
 
 const CANVAS_SIZE = 640;
 
@@ -37,7 +37,7 @@ const FILL_TOLERANCE_BASE = 26;
 
 function parseCssColorToRgb(color: string): [number, number, number] {
   const c = color.trim();
-  if (c.startsWith('#')) {
+  if (c.startsWith("#")) {
     const hex = c.slice(1);
     if (hex.length === 3) {
       return [
@@ -126,7 +126,11 @@ function floodFillOpaque(
 }
 
 /** 한 번의 layout read로 CSS·비트맵 좌표를 같이 계산한다 (호버 시 getBoundingClientRect 이중 호출 방지). */
-function readPointerCoords(canvas: HTMLCanvasElement, clientX: number, clientY: number) {
+function readPointerCoords(
+  canvas: HTMLCanvasElement,
+  clientX: number,
+  clientY: number,
+) {
   const rect = canvas.getBoundingClientRect();
   const xCss = clientX - rect.left;
   const yCss = clientY - rect.top;
@@ -163,38 +167,35 @@ const DrawingCanvasInner = forwardRef<DrawingCanvasHandle, DrawingCanvasProps>(
     const fillWhite = useCallback(() => {
       const canvas = canvasRef.current;
       if (!canvas) return;
-      const ctx = canvas.getContext('2d');
+      const ctx = canvas.getContext("2d");
       if (!ctx) return;
-      ctx.fillStyle = '#ffffff';
+      ctx.fillStyle = "#ffffff";
       ctx.fillRect(0, 0, canvas.width, canvas.height);
     }, []);
 
     const snapshot = useCallback(() => {
       const canvas = canvasRef.current;
-      if (!canvas) return '';
-      return canvas.toDataURL('image/png');
+      if (!canvas) return "";
+      return canvas.toDataURL("image/png");
     }, []);
 
-    const restoreFromDataUrl = useCallback(
-      (dataUrl: string) => {
-        const canvas = canvasRef.current;
-        if (!canvas) return;
-        const ctx = canvas.getContext('2d');
-        if (!ctx) return;
-        const img = new Image();
-        isRestoring.current = true;
-        img.onload = () => {
-          ctx.clearRect(0, 0, canvas.width, canvas.height);
-          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-          isRestoring.current = false;
-        };
-        img.onerror = () => {
-          isRestoring.current = false;
-        };
-        img.src = dataUrl;
-      },
-      [],
-    );
+    const restoreFromDataUrl = useCallback((dataUrl: string) => {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+      const img = new Image();
+      isRestoring.current = true;
+      img.onload = () => {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        isRestoring.current = false;
+      };
+      img.onerror = () => {
+        isRestoring.current = false;
+      };
+      img.src = dataUrl;
+    }, []);
 
     const pushHistory = useCallback(() => {
       if (isRestoring.current) return;
@@ -219,7 +220,8 @@ const DrawingCanvasInner = forwardRef<DrawingCanvasHandle, DrawingCanvasProps>(
       pushHistory();
       return () => {
         if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
-        if (hoverRafRef.current != null) cancelAnimationFrame(hoverRafRef.current);
+        if (hoverRafRef.current != null)
+          cancelAnimationFrame(hoverRafRef.current);
       };
     }, [fillWhite]);
 
@@ -227,16 +229,16 @@ const DrawingCanvasInner = forwardRef<DrawingCanvasHandle, DrawingCanvasProps>(
       (from: { x: number; y: number }, to: { x: number; y: number }) => {
         const canvas = canvasRef.current;
         if (!canvas) return;
-        const ctx = canvas.getContext('2d');
+        const ctx = canvas.getContext("2d");
         if (!ctx) return;
         ctx.save();
         ctx.beginPath();
         ctx.moveTo(from.x, from.y);
         ctx.lineTo(to.x, to.y);
-        ctx.strokeStyle = isEraser ? '#ffffff' : strokeColor;
+        ctx.strokeStyle = isEraser ? "#ffffff" : strokeColor;
         ctx.lineWidth = isEraser ? lineWidth * 2.5 : lineWidth;
-        ctx.lineCap = 'round';
-        ctx.lineJoin = 'round';
+        ctx.lineCap = "round";
+        ctx.lineJoin = "round";
         ctx.globalAlpha = isEraser ? 1 : strokeOpacity;
         ctx.stroke();
         ctx.restore();
@@ -250,12 +252,12 @@ const DrawingCanvasInner = forwardRef<DrawingCanvasHandle, DrawingCanvasProps>(
       (p: { x: number; y: number }) => {
         const canvas = canvasRef.current;
         if (!canvas) return;
-        const ctx = canvas.getContext('2d');
+        const ctx = canvas.getContext("2d");
         if (!ctx) return;
         const r = (isEraser ? lineWidth * 1.25 : lineWidth) / 2;
         ctx.beginPath();
         ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
-        ctx.fillStyle = isEraser ? '#ffffff' : strokeColor;
+        ctx.fillStyle = isEraser ? "#ffffff" : strokeColor;
         ctx.globalAlpha = isEraser ? 1 : strokeOpacity;
         ctx.fill();
         strokeCount.current += 1;
@@ -265,7 +267,7 @@ const DrawingCanvasInner = forwardRef<DrawingCanvasHandle, DrawingCanvasProps>(
     );
 
     useImperativeHandle(ref, () => ({
-      toDataUrl: () => canvasRef.current?.toDataURL('image/png') ?? '',
+      toDataUrl: () => canvasRef.current?.toDataURL("image/png") ?? "",
       clear: () => {
         fillWhite();
         strokeCount.current = 0;
@@ -274,7 +276,8 @@ const DrawingCanvasInner = forwardRef<DrawingCanvasHandle, DrawingCanvasProps>(
         redoRef.current = [];
         pushHistory();
       },
-      getHasDrawing: () => strokeCount.current > 0 || historyRef.current.length > 1,
+      getHasDrawing: () =>
+        strokeCount.current > 0 || historyRef.current.length > 1,
       undo: () => {
         const history = historyRef.current;
         if (history.length <= 1) return;
@@ -315,7 +318,7 @@ const DrawingCanvasInner = forwardRef<DrawingCanvasHandle, DrawingCanvasProps>(
       setCursorVisible(true);
 
       if (isFill) {
-        const ctx = canvas.getContext('2d');
+        const ctx = canvas.getContext("2d");
         if (!ctx) return;
         const w = canvas.width;
         const h = canvas.height;
@@ -323,7 +326,18 @@ const DrawingCanvasInner = forwardRef<DrawingCanvasHandle, DrawingCanvasProps>(
         const [fr, fg, fb] = parseCssColorToRgb(strokeColor);
         const fa = 255;
         const tol = FILL_TOLERANCE_BASE + Math.floor(lineWidth / 3);
-        const changed = floodFillOpaque(imageData, w, h, bitmap.x, bitmap.y, fr, fg, fb, fa, tol);
+        const changed = floodFillOpaque(
+          imageData,
+          w,
+          h,
+          bitmap.x,
+          bitmap.y,
+          fr,
+          fg,
+          fb,
+          fa,
+          tol,
+        );
         if (changed) {
           ctx.putImageData(imageData, 0, 0);
           strokeCount.current += 1;
@@ -383,16 +397,16 @@ const DrawingCanvasInner = forwardRef<DrawingCanvasHandle, DrawingCanvasProps>(
     return (
       <div
         className={[
-          'relative aspect-square w-[min(88vw,min(34svh,300px))] max-w-full touch-none rounded-xl bg-white sm:w-[min(88vw,min(38svh,340px))]',
+          "relative aspect-square w-[min(88vw,min(34svh,300px))] max-w-full touch-none rounded-xl bg-white sm:w-[min(88vw,min(38svh,340px))]",
           className,
         ]
           .filter(Boolean)
-          .join(' ')}
+          .join(" ")}
       >
         <canvas
           ref={canvasRef}
           className="h-full w-full rounded-xl"
-          style={{ cursor: 'none' }}
+          style={{ cursor: "none" }}
           onPointerEnter={(e) => {
             const canvas = canvasRef.current;
             if (!canvas) return;
@@ -423,48 +437,48 @@ const DrawingCanvasInner = forwardRef<DrawingCanvasHandle, DrawingCanvasProps>(
         <div
           ref={cursorWrapRef}
           className={`pointer-events-none absolute left-0 top-0 will-change-transform ${
-            cursorVisible ? 'opacity-100' : 'opacity-0'
+            cursorVisible ? "opacity-100" : "opacity-0"
           }`}
-          style={{ transform: 'translate(0px, 0px)' }}
+          style={{ transform: "translate(0px, 0px)" }}
           aria-hidden={!cursorVisible}
         >
-            <div
-              style={
-                isFill
-                  ? {
-                      width: 22,
-                      height: 22,
-                      transform: 'translate(-50%, -50%)',
-                      borderRadius: 6,
-                      border: '2px solid rgba(15,23,42,0.88)',
-                      boxShadow: '0 0 0 2px rgba(255,255,255,0.65)',
-                      background:
-                        'linear-gradient(135deg, rgba(34,211,238,0.35) 0%, rgba(59,130,246,0.35) 100%)',
-                    }
-                  : {
-                      width: `${(isEraser ? lineWidth * 2.5 : lineWidth) + 6}px`,
-                      height: `${(isEraser ? lineWidth * 2.5 : lineWidth) + 6}px`,
-                      transform: 'translate(-50%, -50%)',
-                      borderRadius: '9999px',
-                      border: isHighlighter
-                        ? '2px solid rgba(168,85,247,0.95)'
-                        : '2px solid rgba(15,23,42,0.85)',
-                      boxShadow:
-                        '0 0 0 2px rgba(255,255,255,0.7), 0 0 10px rgba(2,6,23,0.18)',
-                      background: isEraser
-                        ? 'rgba(226,232,240,0.18)'
-                        : isHighlighter
-                          ? 'rgba(168,85,247,0.08)'
-                          : 'transparent',
-                    }
-              }
-            />
-          </div>
+          <div
+            style={
+              isFill
+                ? {
+                    width: 22,
+                    height: 22,
+                    transform: "translate(-50%, -50%)",
+                    borderRadius: 6,
+                    border: "2px solid rgba(15,23,42,0.88)",
+                    boxShadow: "0 0 0 2px rgba(255,255,255,0.65)",
+                    background:
+                      "linear-gradient(135deg, rgba(34,211,238,0.35) 0%, rgba(59,130,246,0.35) 100%)",
+                  }
+                : {
+                    width: `${(isEraser ? lineWidth * 2.5 : lineWidth) + 6}px`,
+                    height: `${(isEraser ? lineWidth * 2.5 : lineWidth) + 6}px`,
+                    transform: "translate(-50%, -50%)",
+                    borderRadius: "9999px",
+                    border: isHighlighter
+                      ? "2px solid rgba(168,85,247,0.95)"
+                      : "2px solid rgba(15,23,42,0.85)",
+                    boxShadow:
+                      "0 0 0 2px rgba(255,255,255,0.7), 0 0 10px rgba(2,6,23,0.18)",
+                    background: isEraser
+                      ? "rgba(226,232,240,0.18)"
+                      : isHighlighter
+                        ? "rgba(168,85,247,0.08)"
+                        : "transparent",
+                  }
+            }
+          />
         </div>
+      </div>
     );
   },
 );
 
-DrawingCanvasInner.displayName = 'DrawingCanvas';
+DrawingCanvasInner.displayName = "DrawingCanvas";
 
 export const DrawingCanvas = memo(DrawingCanvasInner);

@@ -1,10 +1,10 @@
-'use client';
+"use client";
 
-import Link from 'next/link';
-import { usePathname, useRouter } from 'next/navigation';
-import { useEffect, useRef, useState } from 'react';
-import { apiFetch } from '@/lib/api-client';
-import { clearAuthSession } from '@/lib/auth-session';
+import Link from "next/link";
+import { usePathname, useRouter } from "next/navigation";
+import { useEffect, useRef, useState } from "react";
+import { apiFetch } from "@/lib/api-client";
+import { clearAuthSession } from "@/lib/auth-session";
 
 export default function Header() {
   const router = useRouter();
@@ -13,19 +13,21 @@ export default function Header() {
   const [receivedRequestCount, setReceivedRequestCount] = useState(0);
   const reconcileTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const isRoomDetailPage = Boolean(pathname && /^\/rooms\/[^/]+$/.test(pathname));
+  const isRoomDetailPage = Boolean(
+    pathname && /^\/rooms\/[^/]+$/.test(pathname),
+  );
 
   useEffect(() => {
     const syncAuthState = () => {
-      setIsLoggedIn(Boolean(localStorage.getItem('accessToken')));
+      setIsLoggedIn(Boolean(localStorage.getItem("accessToken")));
     };
 
     syncAuthState();
-    window.addEventListener('storage', syncAuthState);
-    window.addEventListener('auth-changed', syncAuthState);
+    window.addEventListener("storage", syncAuthState);
+    window.addEventListener("auth-changed", syncAuthState);
     return () => {
-      window.removeEventListener('storage', syncAuthState);
-      window.removeEventListener('auth-changed', syncAuthState);
+      window.removeEventListener("storage", syncAuthState);
+      window.removeEventListener("auth-changed", syncAuthState);
     };
   }, []);
 
@@ -36,19 +38,22 @@ export default function Header() {
     }
 
     const loadReceivedCount = async () => {
-      const token = localStorage.getItem('accessToken');
+      const token = localStorage.getItem("accessToken");
       if (!token) {
         setReceivedRequestCount(0);
         return;
       }
       try {
-        const res = await fetch('/api/backend/api/friendship/requests/received', {
-          method: 'GET',
-          headers: {
-            Authorization: `Bearer ${token}`,
+        const res = await fetch(
+          "/api/backend/api/friendship/requests/received",
+          {
+            method: "GET",
+            headers: {
+              Authorization: `Bearer ${token}`,
+            },
+            cache: "no-store",
           },
-          cache: 'no-store',
-        });
+        );
         if (!res.ok) return;
         const json = (await res.json()) as { data?: unknown };
         const list = Array.isArray(json?.data) ? json.data : [];
@@ -67,7 +72,9 @@ export default function Header() {
     };
     const onFriendRequestsChanged = (evt: Event) => {
       const delta =
-        evt instanceof CustomEvent && evt.detail && typeof evt.detail.delta === 'number'
+        evt instanceof CustomEvent &&
+        evt.detail &&
+        typeof evt.detail.delta === "number"
           ? evt.detail.delta
           : 0;
       if (delta !== 0) {
@@ -82,30 +89,36 @@ export default function Header() {
         void loadReceivedCount();
       }, 1500);
     };
-    window.addEventListener('focus', onFocus);
-    window.addEventListener('auth-changed', onFocus);
-    window.addEventListener('friend-requests-changed', onFriendRequestsChanged as EventListener);
+    window.addEventListener("focus", onFocus);
+    window.addEventListener("auth-changed", onFocus);
+    window.addEventListener(
+      "friend-requests-changed",
+      onFriendRequestsChanged as EventListener,
+    );
     return () => {
       clearInterval(timer);
       if (reconcileTimerRef.current) {
         clearTimeout(reconcileTimerRef.current);
         reconcileTimerRef.current = null;
       }
-      window.removeEventListener('focus', onFocus);
-      window.removeEventListener('auth-changed', onFocus);
-      window.removeEventListener('friend-requests-changed', onFriendRequestsChanged as EventListener);
+      window.removeEventListener("focus", onFocus);
+      window.removeEventListener("auth-changed", onFocus);
+      window.removeEventListener(
+        "friend-requests-changed",
+        onFriendRequestsChanged as EventListener,
+      );
     };
   }, [isLoggedIn]);
 
   async function handleLogout() {
     try {
-      await apiFetch<void>('/api/auth/logout', { method: 'DELETE' });
+      await apiFetch<void>("/api/auth/logout", { method: "DELETE" });
     } catch {
       // 토큰 만료 등으로 서버 로그아웃이 실패해도 클라이언트 세션은 반드시 정리
     } finally {
       clearAuthSession();
       setIsLoggedIn(false);
-      router.push('/');
+      router.push("/");
       router.refresh();
     }
   }
@@ -141,7 +154,9 @@ export default function Header() {
           ) : null}
           {isLoggedIn ? (
             <Link
-              href={receivedRequestCount > 0 ? '/friends?tab=received' : '/friends'}
+              href={
+                receivedRequestCount > 0 ? "/friends?tab=received" : "/friends"
+              }
               className="relative rounded-lg px-3 py-2 transition hover:bg-white/10 hover:text-white"
             >
               친구

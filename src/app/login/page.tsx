@@ -1,17 +1,17 @@
-'use client';
+"use client";
 
-import Link from 'next/link';
+import Link from "next/link";
 
-import { useRouter, useSearchParams } from 'next/navigation';
-import { useState } from 'react';
-import { apiFetch } from '@/lib/api-client';
+import { useRouter, useSearchParams } from "next/navigation";
+import { useState } from "react";
+import { apiFetch } from "@/lib/api-client";
 
 export default function LoginPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [error, setError] = useState('');
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [guestLoading, setGuestLoading] = useState(false);
 
@@ -23,55 +23,68 @@ export default function LoginPage() {
     const accessToken = tokens?.accessToken;
     const refreshToken = tokens?.refreshToken;
     if (!accessToken) {
-      throw new Error('서버 응답에서 accessToken을 찾을 수 없습니다.');
+      throw new Error("서버 응답에서 accessToken을 찾을 수 없습니다.");
     }
     if (requireRefreshToken && !refreshToken) {
-      throw new Error('서버 응답에서 refreshToken을 찾을 수 없습니다.');
+      throw new Error("서버 응답에서 refreshToken을 찾을 수 없습니다.");
     }
 
-    localStorage.setItem('accessToken', accessToken);
+    localStorage.setItem("accessToken", accessToken);
     if (refreshToken) {
-      localStorage.setItem('refreshToken', refreshToken);
+      localStorage.setItem("refreshToken", refreshToken);
     } else {
-      localStorage.removeItem('refreshToken');
+      localStorage.removeItem("refreshToken");
     }
-    window.dispatchEvent(new Event('auth-changed'));
-    const redirect = searchParams.get('redirect');
-    const safeRedirect = redirect && redirect.startsWith('/') ? redirect : '/rooms';
+    window.dispatchEvent(new Event("auth-changed"));
+    const redirect = searchParams.get("redirect");
+    const safeRedirect =
+      redirect && redirect.startsWith("/") ? redirect : "/rooms";
     router.push(safeRedirect);
   }
 
   async function onLogin() {
-    setError('');
+    setError("");
     if (!email.trim() || !password.trim()) {
-      setError('이메일과 비밀번호를 입력해주세요.');
+      setError("이메일과 비밀번호를 입력해주세요.");
       return;
     }
 
     setLoading(true);
     try {
-      const data = await apiFetch<{ accessToken?: string; refreshToken?: string }>('/api/auth/login', {
-        method: 'POST',
+      const data = await apiFetch<{
+        accessToken?: string;
+        refreshToken?: string;
+      }>("/api/auth/login", {
+        method: "POST",
         body: JSON.stringify({ email, password }),
       });
       completeLogin(data);
     } catch (e) {
-      setError(e instanceof Error ? e.message : '로그인 중 오류가 발생했습니다.');
+      setError(
+        e instanceof Error ? e.message : "로그인 중 오류가 발생했습니다.",
+      );
     } finally {
       setLoading(false);
     }
   }
 
   async function onGuestLogin() {
-    setError('');
+    setError("");
     setGuestLoading(true);
     try {
-      const data = await apiFetch<{ accessToken?: string; refreshToken?: string }>('/api/auth/guest', {
-        method: 'POST',
+      const data = await apiFetch<{
+        accessToken?: string;
+        refreshToken?: string;
+      }>("/api/auth/guest", {
+        method: "POST",
       });
       completeLogin(data, { requireRefreshToken: false });
     } catch (e) {
-      setError(e instanceof Error ? e.message : '게스트 로그인 중 오류가 발생했습니다.');
+      setError(
+        e instanceof Error
+          ? e.message
+          : "게스트 로그인 중 오류가 발생했습니다.",
+      );
     } finally {
       setGuestLoading(false);
     }
@@ -126,7 +139,9 @@ export default function LoginPage() {
             </label>
 
             <label className="block">
-              <span className="text-sm font-medium text-slate-200">비밀번호</span>
+              <span className="text-sm font-medium text-slate-200">
+                비밀번호
+              </span>
               <input
                 type="password"
                 placeholder="비밀번호를 입력하세요"
@@ -141,7 +156,7 @@ export default function LoginPage() {
               disabled={loading || guestLoading}
               className="w-full rounded-xl bg-gradient-to-r from-blue-500 to-violet-500 px-4 py-3 font-semibold text-white shadow-lg shadow-blue-500/30 transition hover:from-blue-400 hover:to-violet-400 disabled:opacity-60"
             >
-              {loading ? '로그인 중...' : '로그인'}
+              {loading ? "로그인 중..." : "로그인"}
             </button>
 
             <button
@@ -152,17 +167,22 @@ export default function LoginPage() {
               disabled={loading || guestLoading}
               className="w-full rounded-xl border border-white/15 bg-white/5 px-4 py-3 font-semibold text-white transition hover:bg-white/10 disabled:opacity-60"
             >
-              {guestLoading ? '게스트 로그인 중... (닉네임 생성 중)' : '게스트로 시작하기'}
+              {guestLoading
+                ? "게스트 로그인 중... (닉네임 생성 중)"
+                : "게스트로 시작하기"}
             </button>
 
-            {error && <p className="text-center text-sm text-rose-300">{error}</p>}
+            {error && (
+              <p className="text-center text-sm text-rose-300">{error}</p>
+            )}
           </form>
 
           <Link
             href="/signup"
             className="mt-6 block rounded-2xl border border-white/10 bg-slate-950/70 p-4 text-center text-sm text-slate-300 transition hover:border-blue-400/70 hover:bg-white/10"
           >
-            계정이 없나요? <span className="font-semibold text-blue-300">회원가입</span>
+            계정이 없나요?{" "}
+            <span className="font-semibold text-blue-300">회원가입</span>
           </Link>
         </div>
       </section>
