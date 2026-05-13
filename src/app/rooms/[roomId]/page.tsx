@@ -3269,7 +3269,9 @@ function GameBoard({
                   style={{
                     height: chatLogMinimized ? "auto" : "312px",
                     display: "grid",
-                    gridTemplateRows: chatLogMinimized ? "auto auto" : "1fr auto",
+                    gridTemplateRows: chatLogMinimized
+                      ? "auto auto"
+                      : "1fr auto",
                     rowGap: "8px",
                     overflow: "hidden",
                   }}
@@ -3316,71 +3318,71 @@ function GameBoard({
                         className="h-full space-y-1.5 px-3 pb-2 pr-12 pt-7 text-left text-sm"
                         style={{ overflowY: "auto" }}
                       >
-                      {chatMessages.length === 0 ? (
-                        <p className="py-4 text-center text-xs text-slate-500">
-                          아직 메시지가 없습니다.
-                        </p>
-                      ) : (
-                        chatMessages.map((row) => {
-                          const timeStr = new Date(row.at).toLocaleTimeString(
-                            "ko-KR",
-                            {
-                              hour: "2-digit",
-                              minute: "2-digit",
-                              second: "2-digit",
-                            },
-                          );
-                          const moderated =
-                            row.kind === "TALK" &&
-                            isAiModerationBlockedMessage(row.message);
-                          if (row.kind === "NOTICE") {
+                        {chatMessages.length === 0 ? (
+                          <p className="py-4 text-center text-xs text-slate-500">
+                            아직 메시지가 없습니다.
+                          </p>
+                        ) : (
+                          chatMessages.map((row) => {
+                            const timeStr = new Date(row.at).toLocaleTimeString(
+                              "ko-KR",
+                              {
+                                hour: "2-digit",
+                                minute: "2-digit",
+                                second: "2-digit",
+                              },
+                            );
+                            const moderated =
+                              row.kind === "TALK" &&
+                              isAiModerationBlockedMessage(row.message);
+                            if (row.kind === "NOTICE") {
+                              return (
+                                <div
+                                  key={row.id}
+                                  className="rounded-lg bg-slate-800/60 px-2 py-1.5 text-xs leading-relaxed"
+                                >
+                                  <span className="font-mono text-[10px] text-slate-500">
+                                    {timeStr}
+                                  </span>{" "}
+                                  <span className="font-bold text-amber-200/90">
+                                    {row.sender}
+                                  </span>{" "}
+                                  <span className="text-slate-300">
+                                    {row.message}
+                                  </span>
+                                </div>
+                              );
+                            }
                             return (
                               <div
                                 key={row.id}
-                                className="rounded-lg bg-slate-800/60 px-2 py-1.5 text-xs leading-relaxed"
+                                className="flex items-center gap-2 rounded-lg px-2 py-1 leading-snug hover:bg-white/[0.04]"
                               >
-                                <span className="font-mono text-[10px] text-slate-500">
-                                  {timeStr}
-                                </span>{" "}
-                                <span className="font-bold text-amber-200/90">
-                                  {row.sender}
-                                </span>{" "}
-                                <span className="text-slate-300">
-                                  {row.message}
-                                </span>
+                                <div className="min-w-0 flex-1">
+                                  <span className="font-mono text-[10px] text-slate-500">
+                                    {timeStr}
+                                  </span>{" "}
+                                  <span className="font-bold text-violet-200">
+                                    {row.sender}
+                                  </span>
+                                  <span className="text-slate-400">: </span>
+                                  <span
+                                    className={
+                                      moderated
+                                        ? "text-amber-100/95"
+                                        : "text-slate-100"
+                                    }
+                                  >
+                                    {row.message}
+                                  </span>
+                                </div>
+                                <RoomChatModerationBadge row={row} />
                               </div>
                             );
-                          }
-                          return (
-                            <div
-                              key={row.id}
-                              className="flex items-center gap-2 rounded-lg px-2 py-1 leading-snug hover:bg-white/[0.04]"
-                            >
-                              <div className="min-w-0 flex-1">
-                                <span className="font-mono text-[10px] text-slate-500">
-                                  {timeStr}
-                                </span>{" "}
-                                <span className="font-bold text-violet-200">
-                                  {row.sender}
-                                </span>
-                                <span className="text-slate-400">: </span>
-                                <span
-                                  className={
-                                    moderated
-                                      ? "text-amber-100/95"
-                                      : "text-slate-100"
-                                  }
-                                >
-                                  {row.message}
-                                </span>
-                              </div>
-                              <RoomChatModerationBadge row={row} />
-                            </div>
-                          );
-                        })
-                      )}
+                          })
+                        )}
+                      </div>
                     </div>
-                  </div>
                   )}
                   <div className="shrink-0 flex items-center gap-2 rounded-xl bg-slate-950/60 p-2.5">
                     <span
