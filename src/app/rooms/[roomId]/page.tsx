@@ -9,8 +9,8 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { useParams, useRouter } from "next/navigation";
 import { createPortal } from "react-dom";
+import { useParams, useRouter } from "next/navigation";
 import type { DrawingCanvasHandle } from "@/components/DrawingCanvas";
 import { DrawingCanvas } from "@/components/DrawingCanvas";
 import { ProfileImage } from "@/components/ProfileImage";
@@ -3053,6 +3053,7 @@ function GameBoard({
   const chatScrollRef = useRef<HTMLDivElement>(null);
   /** SSR·하이드레이션 첫 페인트와 DOM을 맞추기 위해 클라이언트 마운트 후에만 body 포털을 연다. */
   const [chatPortalMounted, setChatPortalMounted] = useState(false);
+  const [chatLogMinimized, setChatLogMinimized] = useState(false);
   const [submitConfirmOpen, setSubmitConfirmOpen] = useState(false);
   const submitConfirmLockRef = useRef(false);
   const lastTimeOverSignalRef = useRef(0);
@@ -3086,9 +3087,9 @@ function GameBoard({
 
   useEffect(() => {
     const node = chatScrollRef.current;
-    if (!node) return;
+    if (!node || chatLogMinimized) return;
     node.scrollTop = node.scrollHeight;
-  }, [chatMessages]);
+  }, [chatMessages, chatLogMinimized]);
 
   useEffect(() => {
     if (timeOverSignal <= 0) return;
@@ -3258,34 +3259,63 @@ function GameBoard({
                   left: "16px",
                   bottom: "16px",
                   zIndex: 45,
-                  width: "min(560px, calc(100vw - 32px))",
+                  /** 100% 줌 기준 가로 상한 (뷰포트보다 넓어지지 않게) */
+                  width: "min(460px, calc(100vw - 32px))",
                   maxWidth: "calc(100vw - 32px)",
                 }}
               >
                 <div
                   className="pointer-events-auto"
                   style={{
-                    height: "312px",
+                    height: chatLogMinimized ? "auto" : "312px",
                     display: "grid",
-                    gridTemplateRows: "1fr auto",
+                    gridTemplateRows: chatLogMinimized ? "auto auto" : "1fr auto",
                     rowGap: "8px",
                     overflow: "hidden",
                   }}
                 >
-                  <div
-                    className="rounded-xl border bg-slate-950/40"
-                    style={{
-                      minHeight: 0,
-                      overflow: "hidden",
-                      borderColor: "rgba(51, 65, 85, 0.56)",
-                    }}
-                    aria-label="방 채팅 로그"
-                  >
+                  {chatLogMinimized ? (
                     <div
-                      ref={chatScrollRef}
-                      className="h-full space-y-1.5 px-3 py-2 text-left text-sm"
-                      style={{ overflowY: "auto" }}
+                      className="flex shrink-0 items-center justify-between gap-2 rounded-xl border border-slate-600/55 bg-slate-950/70 px-3 py-2"
+                      role="status"
                     >
+                      <span className="text-xs text-slate-400">
+                        채팅 로그 최소화됨
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setChatLogMinimized(false)}
+                        className="shrink-0 rounded-lg border border-white/15 bg-slate-800/80 px-2.5 py-1 text-xs font-semibold text-slate-100 hover:bg-white/10"
+                        aria-expanded={false}
+                        aria-controls="room-chat-log"
+                      >
+                        펼치기
+                      </button>
+                    </div>
+                  ) : (
+                    <div
+                      className="relative min-h-0 rounded-xl border bg-slate-950/40"
+                      style={{
+                        overflow: "hidden",
+                        borderColor: "rgba(51, 65, 85, 0.56)",
+                      }}
+                      aria-label="방 채팅 로그"
+                    >
+                      <button
+                        type="button"
+                        onClick={() => setChatLogMinimized(true)}
+                        className="absolute right-1.5 top-1.5 z-10 rounded-md border border-white/10 bg-slate-900/90 px-2 py-0.5 text-[11px] font-semibold text-slate-200 shadow-sm hover:bg-slate-800"
+                        aria-expanded={true}
+                        aria-controls="room-chat-log"
+                      >
+                        최소화
+                      </button>
+                      <div
+                        id="room-chat-log"
+                        ref={chatScrollRef}
+                        className="h-full space-y-1.5 px-3 pb-2 pr-12 pt-7 text-left text-sm"
+                        style={{ overflowY: "auto" }}
+                      >
                       {chatMessages.length === 0 ? (
                         <p className="py-4 text-center text-xs text-slate-500">
                           아직 메시지가 없습니다.
@@ -3351,6 +3381,7 @@ function GameBoard({
                       )}
                     </div>
                   </div>
+                  )}
                   <div className="shrink-0 flex items-center gap-2 rounded-xl bg-slate-950/60 p-2.5">
                     <span
                       className={`text-xs font-semibold ${chatConnected ? "text-emerald-300" : "text-slate-400"}`}
@@ -3367,7 +3398,7 @@ function GameBoard({
                         }
                       }}
                       maxLength={200}
-                      placeholder="메시지를 입력한 뒤 전송하면 위 로그에 표시됩니다"
+                      placeholder="메시지를 입력해주세요."
                       className="min-w-0 flex-1 rounded-lg border bg-slate-900/70 px-3 py-2 text-sm text-white outline-none placeholder:text-slate-500"
                       style={{ borderColor: "rgba(51, 65, 85, 0.62)" }}
                     />
