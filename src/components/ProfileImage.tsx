@@ -21,6 +21,7 @@ function ProfileImageLoadable({
   const onError = useCallback(() => setUseDefault(true), []);
 
   return (
+    // eslint-disable-next-line @next/next/no-img-element
     <img
       src={useDefault ? DEFAULT_PROFILE_IMAGE : src}
       alt={alt}
@@ -33,6 +34,7 @@ function ProfileImageLoadable({
 export function ProfileImage({ src, alt, ...rest }: ProfileImageProps) {
   const trimmed = (src ?? "").trim();
   if (!trimmed) {
+    // eslint-disable-next-line @next/next/no-img-element
     return <img src={DEFAULT_PROFILE_IMAGE} alt={alt} {...rest} />;
   }
   return (

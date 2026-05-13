@@ -4,7 +4,7 @@ import { Client, type IMessage } from "@stomp/stompjs";
 import SockJS from "sockjs-client";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-export type RoomStompDestination = "room" | "chat" | "ranking";
+export type RoomStompDestination = "room" | "chat" | "ranking" | "notify";
 
 function sockJsUrl(): string {
   const base = (
@@ -15,6 +15,7 @@ function sockJsUrl(): string {
 
 /**
  * 방 단위 STOMP 구독 (`/sub/rooms/{roomId}`, `/sub/rooms/{roomId}/chat`, `/sub/rooms/{roomId}/ranking`).
+ * 선택적으로 `/sub/users/{userId}/notifications`(친구 방 초대 등)도 구독합니다.
  * CONNECT 시 `Authorization: Bearer …` (백엔드 StompHandler와 동일).
  */
 export function useRoomStomp(
@@ -22,6 +23,7 @@ export function useRoomStomp(
   enabled: boolean,
   token: string | null,
   onPayload: (dest: RoomStompDestination, body: unknown) => void,
+  notifyUserId: number | null = null,
 ) {
   const onPayloadRef = useRef(onPayload);
   const clientRef = useRef<Client | null>(null);
@@ -71,6 +73,24 @@ export function useRoomStomp(
             onPayloadRef.current("ranking", body);
           },
         );
+        if (
+          notifyUserId != null &&
+          Number.isFinite(notifyUserId) &&
+          notifyUserId > 0
+        ) {
+          client.subscribe(
+            `/sub/users/${notifyUserId}/notifications`,
+            (message: IMessage) => {
+              let body: unknown = message.body;
+              try {
+                body = JSON.parse(message.body);
+              } catch {
+                /* 그대로 */
+              }
+              onPayloadRef.current("notify", body);
+            },
+          );
+        }
       },
       onStompError: (frame) => {
         setConnected(false);
@@ -93,16 +113,19 @@ export function useRoomStomp(
       clientRef.current = null;
       void client.deactivate();
     };
-  }, [roomId, enabled, token]);
+  }, [roomId, enabled, token, notifyUserId]);
 
   const publishChat = useCallback(
-    (message: string) => {
+    (message: string, moderationTraceId?: string) => {
       const client = clientRef.current;
       const trimmed = message.trim();
       if (!client || !connected || !trimmed) return false;
       client.publish({
         destination: `/pub/rooms/${roomId}/chat`,
-        body: JSON.stringify({ message: trimmed }),
+        body: JSON.stringify({
+          message: trimmed,
+          ...(moderationTraceId ? { moderationTraceId } : {}),
+        }),
       });
       return true;
     },

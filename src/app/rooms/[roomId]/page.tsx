@@ -9,14 +9,25 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { useParams, useRouter } from "next/navigation";
 import { createPortal } from "react-dom";
+import { useParams, useRouter } from "next/navigation";
 import type { DrawingCanvasHandle } from "@/components/DrawingCanvas";
 import { DrawingCanvas } from "@/components/DrawingCanvas";
 import { ProfileImage } from "@/components/ProfileImage";
 import { useRoomStomp, type RoomStompDestination } from "@/hooks/useRoomStomp";
 import { apiFetch, getHttpStatus } from "@/lib/api-client";
-import { clearAuthSession, isUnauthorizedStatus } from "@/lib/auth-session";
+import {
+  clearAuthSession,
+  getJwtUserId,
+  isUnauthorizedStatus,
+} from "@/lib/auth-session";
+
+/** `GET /api/friendship` — 방 초대 후보 목록 */
+type FriendListItemForInvite = {
+  id: number;
+  nickname: string;
+  profileImageUrl: string | null;
+};
 
 type Player = {
   id: number;
@@ -176,7 +187,21 @@ type ChatMessageDtoWs = {
   roomId?: number;
   sender?: string;
   message?: string;
+  moderationPhase?: string;
+  moderationTraceId?: string;
 };
+
+/** STOMP `ChatModerationPhase` — 사용자 채팅 검열 단계 표시 */
+type ChatModerationPhaseUi = "FAST" | "AI";
+
+function parseWsModerationPhase(v: unknown): ChatModerationPhaseUi | null {
+  if (v === "FAST" || v === "AI") return v;
+  return null;
+}
+
+function isAiModerationBlockedMessage(message: string): boolean {
+  return message.includes("[AI 검열에 의해 삭제");
+}
 
 /** 방 채팅 패널(로그) 한 줄 — 백엔드가 TALK를 연속 브로드캐스트(빠른 필터 → AI 검열)할 수 있음 */
 type RoomChatLogEntry = {
@@ -185,9 +210,28 @@ type RoomChatLogEntry = {
   kind: "TALK" | "NOTICE";
   sender: string;
   message: string;
+  moderationPhase?: ChatModerationPhaseUi;
+  moderationTraceId?: string;
+};
+
+type PendingOptimisticChat = {
+  optimisticId: string;
+  traceId: string;
 };
 
 const MAX_ROOM_CHAT_MESSAGES = 200;
+
+function RoomChatModerationBadge({ row }: { row: RoomChatLogEntry }) {
+  if (row.kind !== "TALK") return null;
+  const aiBlocked =
+    row.moderationPhase === "AI" || isAiModerationBlockedMessage(row.message);
+  if (!aiBlocked) return null;
+  return (
+    <span className="ml-3 shrink-0 rounded-md bg-rose-500/20 px-1.5 py-0.5 text-[10px] font-semibold text-rose-100/95 ring-1 ring-rose-400/35">
+      AI 검열
+    </span>
+  );
+}
 
 /** GET /api/rounds/{roundId}/submissions — 종료 라운드 점수판·그림 */
 type RoundSubmissionItem = {
@@ -653,26 +697,6 @@ function mergePlayersKeepSubmitted(prev: Player[], mapped: Player[]): Player[] {
   });
 }
 
-function getJwtUserId(token: string | null): number | null {
-  if (!token) return null;
-  try {
-    const parts = token.split(".");
-    if (parts.length < 2) return null;
-    const payloadPart = parts[1]!;
-    const base64 = payloadPart.replace(/-/g, "+").replace(/_/g, "/");
-    const padded = base64 + "=".repeat((4 - (base64.length % 4)) % 4);
-    const decoded = atob(padded);
-    const payload = JSON.parse(decoded) as {
-      userId?: number;
-      user_id?: number;
-    };
-    const id = payload.userId ?? payload.user_id;
-    return typeof id === "number" ? id : id != null ? Number(id) : null;
-  } catch {
-    return null;
-  }
-}
-
 /** 라운드 종료 직후 결과를 볼 시간을 준 뒤 다음 라운드(또는 로비)로 동기화 */
 const ROUND_ADVANCE_SYNC_DELAY_MS = 10_000;
 /** 서버 RoundService.ROUND_TIME_LIMIT 과 동일 — API 에 timeLimit 이 없을 때만 */
@@ -820,12 +844,20 @@ export default function RoomDetailPage() {
     answer: string;
     points: number;
   } | null>(null);
+  const [friendInviteOpen, setFriendInviteOpen] = useState(false);
+  const [friendInviteLoading, setFriendInviteLoading] = useState(false);
+  const [friendInviteList, setFriendInviteList] = useState<
+    FriendListItemForInvite[]
+  >([]);
+  const [friendInviteSendingId, setFriendInviteSendingId] = useState<
+    number | null
+  >(null);
   const myAiRoundSubmitByRoundIdRef = useRef<
     Map<number, { points: number; answer: string }>
   >(new Map());
   const lastSeenRoundIdForScoreRef = useRef<number | null>(null);
   /** 내가 연속으로 보낸 낙관적 채팅 줄 id — STOMP 에코가 보낸 순서(FIFO)로 하나씩 제거·교체 */
-  const pendingOptimisticChatQueueRef = useRef<string[]>([]);
+  const pendingOptimisticChatQueueRef = useRef<PendingOptimisticChat[]>([]);
 
   const roundAdvanceSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
     null,
@@ -860,6 +892,12 @@ export default function RoomDetailPage() {
         kind: entry.kind,
         sender: entry.sender,
         message: entry.message,
+        ...(entry.moderationPhase != null
+          ? { moderationPhase: entry.moderationPhase }
+          : {}),
+        ...(entry.moderationTraceId
+          ? { moderationTraceId: entry.moderationTraceId }
+          : {}),
       };
       setRoomChatMessages((prev) => {
         const next = [...prev, row];
@@ -979,7 +1017,7 @@ export default function RoomDetailPage() {
       }
       /* 그 외 STOMP 동기화 실패는 조용히 무시 */
     }
-  }, [roomIdNumber, clearRoomChatLog]);
+  }, [roomIdNumber]);
 
   useEffect(() => {
     refreshRoomParticipantsRef.current = refreshRoomParticipants;
@@ -1187,31 +1225,151 @@ export default function RoomDetailPage() {
           appendRoomChatEntry({ kind: "NOTICE", sender: label, message: msg });
         } else {
           const senderNorm = (sender || "익명").trim();
-          const myUid = getJwtUserId(
-            typeof window !== "undefined"
-              ? localStorage.getItem("accessToken")
-              : null,
-          );
-          const me =
-            myUid != null
-              ? playersRef.current.find((p) => p.userId === myUid)
-              : undefined;
-          const myNick = (me?.nickname ?? "").trim();
+          const traceId =
+            typeof c.moderationTraceId === "string"
+              ? c.moderationTraceId.trim()
+              : "";
+          const modPhase = parseWsModerationPhase(c.moderationPhase);
+
+          if (modPhase === "AI" && traceId) {
+            setRoomChatMessages((prev) => {
+              const idx = prev.findIndex(
+                (r) => r.kind === "TALK" && r.moderationTraceId === traceId,
+              );
+              if (idx >= 0) {
+                const next = [...prev];
+                const old = next[idx]!;
+                next[idx] = {
+                  ...old,
+                  message: msg,
+                  moderationPhase: "AI",
+                };
+                return next;
+              }
+              const at = Date.now();
+              const id = `chat-${at}-${Math.random().toString(36).slice(2, 10)}`;
+              const orphan: RoomChatLogEntry = {
+                id,
+                at,
+                kind: "TALK",
+                sender: senderNorm,
+                message: msg,
+                moderationPhase: "AI",
+                moderationTraceId: traceId,
+              };
+              const nxt = [...prev, orphan];
+              return nxt.length > MAX_ROOM_CHAT_MESSAGES
+                ? nxt.slice(-MAX_ROOM_CHAT_MESSAGES)
+                : nxt;
+            });
+            return;
+          }
+
+          /** 서버에 trace가 없을 때: 최근 120s 안 동일 발신자의 비-AI 줄이 정확히 1개일 때만 덮어쓴다.
+           *  (개새·안녕처럼 연속 두 줄이면 어느 줄용 AI인지 알 수 없어 덮어쓰지 않음 → 안녕이 검열되는 버그 방지) */
+          if (isAiModerationBlockedMessage(msg)) {
+            setRoomChatMessages((prev) => {
+              const last = prev[prev.length - 1];
+              if (
+                last &&
+                last.kind === "TALK" &&
+                last.sender === senderNorm &&
+                last.message === msg
+              ) {
+                return prev;
+              }
+              const now = Date.now();
+              const windowMs = 120_000;
+              const candidateIdx: number[] = [];
+              for (let i = 0; i < prev.length; i++) {
+                const r = prev[i]!;
+                if (r.kind !== "TALK" || r.sender !== senderNorm) continue;
+                if (isAiModerationBlockedMessage(r.message)) continue;
+                if (now - r.at > windowMs) continue;
+                candidateIdx.push(i);
+              }
+              if (candidateIdx.length === 1) {
+                const i = candidateIdx[0]!;
+                const r = prev[i]!;
+                const next = [...prev];
+                next[i] = {
+                  ...r,
+                  message: msg,
+                  moderationPhase: "AI",
+                };
+                return next.length > MAX_ROOM_CHAT_MESSAGES
+                  ? next.slice(-MAX_ROOM_CHAT_MESSAGES)
+                  : next;
+              }
+              const at = Date.now();
+              const id = `chat-${at}-${Math.random().toString(36).slice(2, 10)}`;
+              const orphan: RoomChatLogEntry = {
+                id,
+                at,
+                kind: "TALK",
+                sender: senderNorm,
+                message: msg,
+                moderationPhase: "AI",
+              };
+              const nxt = [...prev, orphan];
+              return nxt.length > MAX_ROOM_CHAT_MESSAGES
+                ? nxt.slice(-MAX_ROOM_CHAT_MESSAGES)
+                : nxt;
+            });
+            return;
+          }
+
           const q = pendingOptimisticChatQueueRef.current;
-          if (myNick && senderNorm === myNick && q.length > 0) {
-            const pendingId = q[0]!;
-            pendingOptimisticChatQueueRef.current = q.slice(1);
+          const pendingByTraceIdx =
+            traceId.length > 0
+              ? q.findIndex((item) => item.traceId === traceId)
+              : -1;
+          if (pendingByTraceIdx >= 0) {
+            const pending = q[pendingByTraceIdx]!;
+            pendingOptimisticChatQueueRef.current = q.filter(
+              (_, idx) => idx !== pendingByTraceIdx,
+            );
             const at = Date.now();
             const id = `chat-${at}-${Math.random().toString(36).slice(2, 10)}`;
+            const effectiveTraceId = traceId || pending.traceId;
             const row: RoomChatLogEntry = {
               id,
               at,
               kind: "TALK",
               sender: senderNorm,
               message: msg,
+              ...(modPhase != null ? { moderationPhase: modPhase } : {}),
+              ...(effectiveTraceId
+                ? { moderationTraceId: effectiveTraceId }
+                : {}),
             };
             setRoomChatMessages((prev) => {
-              const cut = prev.filter((r) => r.id !== pendingId);
+              const cut = prev.filter((r) => r.id !== pending.optimisticId);
+              const next = [...cut, row];
+              return next.length > MAX_ROOM_CHAT_MESSAGES
+                ? next.slice(-MAX_ROOM_CHAT_MESSAGES)
+                : next;
+            });
+          } else if (q.length > 0 && modPhase !== "AI") {
+            // 구버전 백엔드(traceId 미포함) 호환: 내 최신 낙관적 줄 1개를 에코로 대체
+            const pending = q[0]!;
+            pendingOptimisticChatQueueRef.current = q.slice(1);
+            const at = Date.now();
+            const id = `chat-${at}-${Math.random().toString(36).slice(2, 10)}`;
+            const effectiveTraceId = traceId || pending.traceId;
+            const row: RoomChatLogEntry = {
+              id,
+              at,
+              kind: "TALK",
+              sender: senderNorm,
+              message: msg,
+              ...(modPhase != null ? { moderationPhase: modPhase } : {}),
+              ...(effectiveTraceId
+                ? { moderationTraceId: effectiveTraceId }
+                : {}),
+            };
+            setRoomChatMessages((prev) => {
+              const cut = prev.filter((r) => r.id !== pending.optimisticId);
               const next = [...cut, row];
               return next.length > MAX_ROOM_CHAT_MESSAGES
                 ? next.slice(-MAX_ROOM_CHAT_MESSAGES)
@@ -1222,6 +1380,8 @@ export default function RoomDetailPage() {
               kind: "TALK",
               sender: senderNorm,
               message: msg,
+              ...(modPhase != null ? { moderationPhase: modPhase } : {}),
+              ...(traceId ? { moderationTraceId: traceId } : {}),
             });
           }
         }
@@ -1347,7 +1507,6 @@ export default function RoomDetailPage() {
       roundInfo,
       scheduleRoundAdvanceSync,
       appendRoomChatEntry,
-      roundInfo?.roundId,
     ],
   );
 
@@ -1576,6 +1735,7 @@ export default function RoomDetailPage() {
     const answer = String(submitInfo.submittedAiAnswer ?? "").trim();
     myAiRoundSubmitByRoundIdRef.current.set(rid, { points: pts, answer });
   }, [
+    roundInfo,
     roundInfo?.roundId,
     roundInfo?.status,
     submitInfo?.submittedAiAnswer,
@@ -1927,26 +2087,86 @@ export default function RoomDetailPage() {
     if (!trimmed) return;
     const myNick = myPlayer?.nickname?.trim() || "나";
     const optimisticId = `opt-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    const traceId = `trace-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
     pendingOptimisticChatQueueRef.current = [
       ...pendingOptimisticChatQueueRef.current,
-      optimisticId,
+      { optimisticId, traceId },
     ];
     appendRoomChatEntry({
       kind: "TALK",
       sender: myNick,
       message: trimmed,
       id: optimisticId,
+      moderationTraceId: traceId,
     });
-    const ok = publishChat(trimmed);
+    const ok = publishChat(trimmed, traceId);
     if (!ok) {
       pendingOptimisticChatQueueRef.current =
         pendingOptimisticChatQueueRef.current.filter(
-          (id) => id !== optimisticId,
+          (item) => item.optimisticId !== optimisticId,
         );
       setRoomChatMessages((prev) => prev.filter((r) => r.id !== optimisticId));
       setError("채팅 서버 연결이 불안정합니다. 잠시 후 다시 시도해 주세요.");
     }
   }
+
+  const openFriendInviteModal = useCallback(async () => {
+    setFriendInviteOpen(true);
+    setFriendInviteLoading(true);
+    setFriendInviteList([]);
+    setError("");
+    try {
+      const list = await apiFetch<FriendListItemForInvite[]>(
+        "/api/friendship",
+        {
+          method: "GET",
+        },
+      );
+      setFriendInviteList(Array.isArray(list) ? list : []);
+    } catch {
+      setFriendInviteList([]);
+      setError("친구 목록을 불러오지 못했습니다.");
+    } finally {
+      setFriendInviteLoading(false);
+    }
+  }, []);
+
+  const sendRoomInvite = useCallback(
+    async (friendId: number) => {
+      if (!roomIdNumber) return;
+      setFriendInviteSendingId(friendId);
+      setError("");
+      try {
+        await apiFetch<unknown>(
+          `/api/rooms/${roomIdNumber}/invite/${friendId}`,
+          {
+            method: "POST",
+            body: JSON.stringify({}),
+          },
+        );
+        setFriendInviteOpen(false);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "초대를 보내지 못했습니다.");
+      } finally {
+        setFriendInviteSendingId(null);
+      }
+    },
+    [roomIdNumber],
+  );
+
+  const showFriendInviteInHud = Boolean(
+    !isRoomInProgress && stompToken && roomIdNumber && myPlayer,
+  );
+
+  const friendInviteCandidates = useMemo(() => {
+    const inRoom = new Set<number>();
+    for (const p of players) {
+      if (typeof p.userId === "number" && Number.isFinite(p.userId)) {
+        inRoom.add(p.userId);
+      }
+    }
+    return friendInviteList.filter((f) => !inRoom.has(f.id));
+  }, [friendInviteList, players]);
 
   return (
     <main className="relative min-h-[calc(100vh-4rem)] overflow-hidden text-white">
@@ -2031,6 +2251,8 @@ export default function RoomDetailPage() {
           loadingStart={loadingStart}
           onLeaveRoom={handleLeaveRoom}
           leavingRoom={leavingRoom}
+          showInviteFriends={showFriendInviteInHud}
+          onInviteFriendsClick={() => void openFriendInviteModal()}
         />
 
         {roundAdvanceCountdownSec != null && roundAdvanceCountdownSec > 0 ? (
@@ -2069,6 +2291,73 @@ export default function RoomDetailPage() {
           <PlayerColumn players={rightPlayers} />
         </section>
       </div>
+
+      {friendInviteOpen ? (
+        <div
+          className="fixed inset-0 z-[75] flex items-center justify-center bg-slate-950/75 p-4 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          aria-label="친구 초대"
+          onClick={() => setFriendInviteOpen(false)}
+        >
+          <div
+            className="max-h-[min(85vh,560px)] w-full max-w-md overflow-hidden rounded-2xl border border-white/10 bg-slate-900/95 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-white/10 px-4 py-3 sm:px-5">
+              <h2 className="text-lg font-black text-white">친구 초대</h2>
+              <button
+                type="button"
+                onClick={() => setFriendInviteOpen(false)}
+                className="rounded-full border border-white/15 px-2.5 py-1 text-sm text-slate-300 hover:bg-white/10 hover:text-white"
+              >
+                닫기
+              </button>
+            </div>
+            <div className="max-h-[calc(85vh-8rem)] overflow-y-auto px-4 py-3 sm:px-5">
+              {friendInviteLoading ? (
+                <p className="py-8 text-center text-sm text-slate-400">
+                  친구 목록을 불러오는 중…
+                </p>
+              ) : friendInviteCandidates.length === 0 ? (
+                <p className="py-8 text-center text-sm text-slate-400">
+                  초대할 수 있는 친구가 없습니다.
+                  <br />
+                  (이미 방에 있거나 친구 목록이 비었습니다.)
+                </p>
+              ) : (
+                <ul className="space-y-2">
+                  {friendInviteCandidates.map((f) => (
+                    <li
+                      key={f.id}
+                      className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2.5"
+                    >
+                      <div className="flex min-w-0 flex-1 items-center gap-2.5">
+                        <ProfileImage
+                          src={f.profileImageUrl}
+                          alt=""
+                          className="h-9 w-9 shrink-0"
+                        />
+                        <span className="truncate font-semibold text-white">
+                          {f.nickname}
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        disabled={friendInviteSendingId === f.id}
+                        onClick={() => void sendRoomInvite(f.id)}
+                        className="shrink-0 rounded-lg bg-gradient-to-r from-blue-500 to-violet-500 px-3 py-1.5 text-xs font-bold text-white shadow-md transition hover:from-blue-400 hover:to-violet-400 disabled:opacity-50"
+                      >
+                        {friendInviteSendingId === f.id ? "전송 중…" : "초대"}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
+        </div>
+      ) : null}
     </main>
   );
 }
@@ -2187,6 +2476,7 @@ function RoundEndScoreboardOverlay({
                     </div>
                     <div className="relative aspect-square w-full bg-white">
                       {imageSrc ? (
+                        // eslint-disable-next-line @next/next/no-img-element
                         <img
                           src={imageSrc}
                           alt={`${item.nickname} 제출`}
@@ -2509,6 +2799,8 @@ function TopHud({
   loadingStart,
   onLeaveRoom,
   leavingRoom,
+  showInviteFriends,
+  onInviteFriendsClick,
 }: {
   roomId: string;
   roundLabel: string;
@@ -2526,6 +2818,8 @@ function TopHud({
   loadingStart: boolean;
   onLeaveRoom: () => void | Promise<void>;
   leavingRoom: boolean;
+  showInviteFriends: boolean;
+  onInviteFriendsClick: () => void;
 }) {
   return (
     <header className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 shadow-2xl backdrop-blur sm:rounded-[2rem] sm:px-6 sm:py-4">
@@ -2570,6 +2864,15 @@ function TopHud({
                 : hasAiPlayer
                   ? "AI 제거"
                   : "AI 추가"}
+            </button>
+          ) : null}
+          {showInviteFriends ? (
+            <button
+              type="button"
+              onClick={onInviteFriendsClick}
+              className="rounded-2xl border border-sky-300/35 bg-sky-500/10 px-5 py-3 text-sm font-bold text-sky-100 transition hover:bg-sky-500/20"
+            >
+              친구 초대
             </button>
           ) : null}
           <button
@@ -2750,6 +3053,7 @@ function GameBoard({
   const chatScrollRef = useRef<HTMLDivElement>(null);
   /** SSR·하이드레이션 첫 페인트와 DOM을 맞추기 위해 클라이언트 마운트 후에만 body 포털을 연다. */
   const [chatPortalMounted, setChatPortalMounted] = useState(false);
+  const [chatLogMinimized, setChatLogMinimized] = useState(false);
   const [submitConfirmOpen, setSubmitConfirmOpen] = useState(false);
   const submitConfirmLockRef = useRef(false);
   const lastTimeOverSignalRef = useRef(0);
@@ -2783,9 +3087,9 @@ function GameBoard({
 
   useEffect(() => {
     const node = chatScrollRef.current;
-    if (!node) return;
+    if (!node || chatLogMinimized) return;
     node.scrollTop = node.scrollHeight;
-  }, [chatMessages]);
+  }, [chatMessages, chatLogMinimized]);
 
   useEffect(() => {
     if (timeOverSignal <= 0) return;
@@ -2955,98 +3259,131 @@ function GameBoard({
                   left: "16px",
                   bottom: "16px",
                   zIndex: 45,
-                  width: "min(560px, calc(100vw - 32px))",
+                  /** 100% 줌 기준 가로 상한 (뷰포트보다 넓어지지 않게) */
+                  width: "min(460px, calc(100vw - 32px))",
                   maxWidth: "calc(100vw - 32px)",
                 }}
               >
                 <div
                   className="pointer-events-auto"
                   style={{
-                    height: "312px",
+                    height: chatLogMinimized ? "auto" : "312px",
                     display: "grid",
-                    gridTemplateRows: "1fr auto",
+                    gridTemplateRows: chatLogMinimized
+                      ? "auto auto"
+                      : "1fr auto",
                     rowGap: "8px",
                     overflow: "hidden",
                   }}
                 >
-                  <div
-                    className="rounded-xl border bg-slate-950/40"
-                    style={{
-                      minHeight: 0,
-                      overflow: "hidden",
-                      borderColor: "rgba(51, 65, 85, 0.56)",
-                    }}
-                    aria-label="방 채팅 로그"
-                  >
+                  {chatLogMinimized ? (
                     <div
-                      ref={chatScrollRef}
-                      className="h-full space-y-1.5 px-3 py-2 text-left text-sm"
-                      style={{ overflowY: "auto" }}
+                      className="flex shrink-0 items-center justify-between gap-2 rounded-xl border border-slate-600/55 bg-slate-950/70 px-3 py-2"
+                      role="status"
                     >
-                      {chatMessages.length === 0 ? (
-                        <p className="py-4 text-center text-xs text-slate-500">
-                          아직 메시지가 없습니다.
-                        </p>
-                      ) : (
-                        chatMessages.map((row) => {
-                          const timeStr = new Date(row.at).toLocaleTimeString(
-                            "ko-KR",
-                            {
-                              hour: "2-digit",
-                              minute: "2-digit",
-                              second: "2-digit",
-                            },
-                          );
-                          const moderated =
-                            row.kind === "TALK" &&
-                            (row.message.includes("[AI 검열") ||
-                              row.message.includes("[부적절") ||
-                              row.message === "****");
-                          if (row.kind === "NOTICE") {
+                      <span className="text-xs text-slate-400">
+                        채팅 로그 최소화됨
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setChatLogMinimized(false)}
+                        className="shrink-0 rounded-lg border border-white/15 bg-slate-800/80 px-2.5 py-1 text-xs font-semibold text-slate-100 hover:bg-white/10"
+                        aria-expanded={false}
+                        aria-controls="room-chat-log"
+                      >
+                        펼치기
+                      </button>
+                    </div>
+                  ) : (
+                    <div
+                      className="relative min-h-0 rounded-xl border bg-slate-950/40"
+                      style={{
+                        overflow: "hidden",
+                        borderColor: "rgba(51, 65, 85, 0.56)",
+                      }}
+                      aria-label="방 채팅 로그"
+                    >
+                      <button
+                        type="button"
+                        onClick={() => setChatLogMinimized(true)}
+                        className="absolute right-1.5 top-1.5 z-10 rounded-md border border-white/10 bg-slate-900/90 px-2 py-0.5 text-[11px] font-semibold text-slate-200 shadow-sm hover:bg-slate-800"
+                        aria-expanded={true}
+                        aria-controls="room-chat-log"
+                      >
+                        최소화
+                      </button>
+                      <div
+                        id="room-chat-log"
+                        ref={chatScrollRef}
+                        className="h-full space-y-1.5 px-3 pb-2 pr-12 pt-7 text-left text-sm"
+                        style={{ overflowY: "auto" }}
+                      >
+                        {chatMessages.length === 0 ? (
+                          <p className="py-4 text-center text-xs text-slate-500">
+                            아직 메시지가 없습니다.
+                          </p>
+                        ) : (
+                          chatMessages.map((row) => {
+                            const timeStr = new Date(row.at).toLocaleTimeString(
+                              "ko-KR",
+                              {
+                                hour: "2-digit",
+                                minute: "2-digit",
+                                second: "2-digit",
+                              },
+                            );
+                            const moderated =
+                              row.kind === "TALK" &&
+                              isAiModerationBlockedMessage(row.message);
+                            if (row.kind === "NOTICE") {
+                              return (
+                                <div
+                                  key={row.id}
+                                  className="rounded-lg bg-slate-800/60 px-2 py-1.5 text-xs leading-relaxed"
+                                >
+                                  <span className="font-mono text-[10px] text-slate-500">
+                                    {timeStr}
+                                  </span>{" "}
+                                  <span className="font-bold text-amber-200/90">
+                                    {row.sender}
+                                  </span>{" "}
+                                  <span className="text-slate-300">
+                                    {row.message}
+                                  </span>
+                                </div>
+                              );
+                            }
                             return (
                               <div
                                 key={row.id}
-                                className="rounded-lg bg-slate-800/60 px-2 py-1.5 text-xs leading-relaxed"
+                                className="flex items-center gap-2 rounded-lg px-2 py-1 leading-snug hover:bg-white/[0.04]"
                               >
-                                <span className="font-mono text-[10px] text-slate-500">
-                                  {timeStr}
-                                </span>{" "}
-                                <span className="font-bold text-amber-200/90">
-                                  {row.sender}
-                                </span>{" "}
-                                <span className="text-slate-300">
-                                  {row.message}
-                                </span>
+                                <div className="min-w-0 flex-1">
+                                  <span className="font-mono text-[10px] text-slate-500">
+                                    {timeStr}
+                                  </span>{" "}
+                                  <span className="font-bold text-violet-200">
+                                    {row.sender}
+                                  </span>
+                                  <span className="text-slate-400">: </span>
+                                  <span
+                                    className={
+                                      moderated
+                                        ? "text-amber-100/95"
+                                        : "text-slate-100"
+                                    }
+                                  >
+                                    {row.message}
+                                  </span>
+                                </div>
+                                <RoomChatModerationBadge row={row} />
                               </div>
                             );
-                          }
-                          return (
-                            <div
-                              key={row.id}
-                              className="rounded-lg px-2 py-1 leading-snug hover:bg-white/[0.04]"
-                            >
-                              <span className="font-mono text-[10px] text-slate-500">
-                                {timeStr}
-                              </span>{" "}
-                              <span className="font-bold text-violet-200">
-                                {row.sender}
-                              </span>
-                              <span className="text-slate-400">: </span>
-                              <span
-                                className={
-                                  moderated
-                                    ? "text-amber-100/95"
-                                    : "text-slate-100"
-                                }
-                              >
-                                {row.message}
-                              </span>
-                            </div>
-                          );
-                        })
-                      )}
+                          })
+                        )}
+                      </div>
                     </div>
-                  </div>
+                  )}
                   <div className="shrink-0 flex items-center gap-2 rounded-xl bg-slate-950/60 p-2.5">
                     <span
                       className={`text-xs font-semibold ${chatConnected ? "text-emerald-300" : "text-slate-400"}`}
@@ -3063,7 +3400,7 @@ function GameBoard({
                         }
                       }}
                       maxLength={200}
-                      placeholder="메시지를 입력한 뒤 전송하면 위 로그에 표시됩니다"
+                      placeholder="메시지를 입력해주세요."
                       className="min-w-0 flex-1 rounded-lg border bg-slate-900/70 px-3 py-2 text-sm text-white outline-none placeholder:text-slate-500"
                       style={{ borderColor: "rgba(51, 65, 85, 0.62)" }}
                     />
@@ -3086,7 +3423,7 @@ function GameBoard({
         <ConfirmModal
           title="그림 제출"
           description="정말 제출할까요? 제출 후에는 수정할 수 없습니다."
-          confirmLabel={loadingSubmit ? "제출 중…" : "제출하기"}
+          confirmLabel={loadingSubmit ? "AI 판별 중…" : "제출하기"}
           cancelLabel="취소"
           busy={loadingSubmit}
           disabled={loadingSubmit}
@@ -3127,7 +3464,7 @@ function DrawingToolbar({
   canRedo: boolean;
   onSubmit: () => void;
   loadingSubmit: boolean;
-  /** 제출 중 도구 조작 비활성화(자동 제출 등 모달 없이 진행될 때) */
+  /** 제출·AI 판별 대기 중 도구 조작 비활성화(자동 제출 등 모달 없이 진행될 때) */
   interactionLocked: boolean;
 }) {
   const [openHelp, setOpenHelp] = useState<null | "undo" | "redo">(null);
@@ -3353,7 +3690,7 @@ function DrawingToolbar({
                   className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-white/35 border-t-white"
                   aria-hidden
                 />
-                제출 중…
+                AI 판별 중…
               </span>
             ) : (
               "그림 제출"

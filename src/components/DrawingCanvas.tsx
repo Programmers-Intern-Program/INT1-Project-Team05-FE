@@ -10,6 +10,7 @@ import {
   useState,
   type PointerEvent,
 } from "react";
+import { canvasToCompressedDataUrl } from "@/lib/canvas-image";
 
 const CANVAS_SIZE = 640;
 
@@ -280,7 +281,8 @@ const DrawingCanvasInner = forwardRef<DrawingCanvasHandle, DrawingCanvasProps>(
     useImperativeHandle(
       ref,
       () => ({
-        toDataUrl: () => canvasRef.current?.toDataURL("image/png") ?? "",
+        toDataUrl: () =>
+          canvasRef.current ? canvasToCompressedDataUrl(canvasRef.current) : "",
         clear: () => {
           fillWhite();
           strokeCount.current = 0;
