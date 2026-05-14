@@ -1000,7 +1000,9 @@ export default function RoomDetailPage() {
             // current-round는 방 입장 직후/재연결 타이밍에 잠깐 403-4가 날 수 있다.
             // 즉시 튕기지 않고 방 상태를 유지한 채 재동기화한다.
             if (
-              msg.includes("해당 방 참가자만 현재 라운드를 조회할 수 있습니다.") ||
+              msg.includes(
+                "해당 방 참가자만 현재 라운드를 조회할 수 있습니다.",
+              ) ||
               msg.includes("403-4")
             ) {
               setRoundInfo(null);
