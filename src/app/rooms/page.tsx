@@ -26,6 +26,7 @@ export default function RoomsPage() {
   const [listReady, setListReady] = useState(false);
   const [error, setError] = useState("");
   const ghostCandidateSinceRef = useRef<Map<number, number>>(new Map());
+  const unauthorizedBlockedRef = useRef(false);
 
   const [showCreate, setShowCreate] = useState(false);
   const [title, setTitle] = useState("");
@@ -54,13 +55,15 @@ export default function RoomsPage() {
   }, [lobbyRooms]);
 
   async function loadRooms() {
+    if (unauthorizedBlockedRef.current) return;
     try {
-      setError("");
       const data = await apiFetch<Room[]>(`/api/rooms`, { method: "GET" });
       setRooms(data ?? []);
+      setError("");
     } catch (e) {
       const status = getHttpStatus(e);
       if (isUnauthorizedStatus(status)) {
+        unauthorizedBlockedRef.current = true;
         clearAuthSession();
         setRooms([]);
         setError(
