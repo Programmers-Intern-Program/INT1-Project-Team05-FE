@@ -41,3 +41,57 @@ a {
 button {
   cursor: pointer;
 }
+
+/* 방 라운드 HUD: 마감 직전 피버 / 0초 대기 시 불꽃→잔광 루프 */
+@keyframes room-timer-fever {
+  0%,
+  100% {
+    border-color: rgba(34, 211, 238, 0.42);
+    box-shadow:
+      0 0 0 1px rgba(34, 211, 238, 0.2),
+      0 0 16px rgba(6, 182, 212, 0.18);
+  }
+  50% {
+    border-color: rgba(251, 191, 36, 0.55);
+    box-shadow:
+      0 0 0 1px rgba(251, 146, 60, 0.45),
+      0 0 26px rgba(251, 113, 133, 0.32),
+      0 0 42px rgba(234, 179, 8, 0.12);
+  }
+}
+
+.room-timer-fever {
+  animation: room-timer-fever 1.05s ease-in-out infinite;
+}
+
+@keyframes room-timer-burn {
+  0% {
+    border-color: rgba(253, 224, 71, 0.95);
+    box-shadow:
+      0 0 0 1px rgba(251, 146, 60, 0.75),
+      0 0 22px rgba(251, 113, 133, 0.7),
+      0 0 44px rgba(234, 88, 12, 0.38),
+      inset 0 0 28px rgba(254, 249, 195, 0.14);
+    filter: saturate(1.2) brightness(1.06);
+  }
+  42% {
+    border-color: rgba(248, 113, 113, 0.55);
+    box-shadow:
+      0 0 0 1px rgba(234, 88, 12, 0.35),
+      0 0 14px rgba(251, 113, 133, 0.28),
+      inset 0 0 12px rgba(15, 23, 42, 0.35);
+    filter: saturate(1) brightness(0.98);
+  }
+  100% {
+    border-color: rgba(51, 65, 85, 0.45);
+    box-shadow:
+      0 0 0 1px rgba(15, 23, 42, 0.55),
+      0 0 4px rgba(71, 85, 105, 0.15),
+      inset 0 0 6px rgba(2, 6, 23, 0.55);
+    filter: saturate(0.8) brightness(0.88);
+  }
+}
+
+.room-timer-burn {
+  animation: room-timer-burn 2.45s ease-in-out infinite;
+}
