@@ -586,6 +586,33 @@ function normalizeCurrentRoundData(
 }
 
 /**
+ * 힌트 없이 라운드 슬롯에 방 참가자를 붙일 때 사용한다.
+ * `userId`만 오름차순으로 두면 DB에 따라 AI userId가 사람보다 작아져 사람/AI 행이 뒤바뀔 수 있다.
+ */
+function sortRoomParticipantsForStableRoundMatch(
+  pool: RoomDetailParticipant[],
+): RoomDetailParticipant[] {
+  return [...pool].sort((a, b) => {
+    const aiA = participantDtoIsAi(a);
+    const aiB = participantDtoIsAi(b);
+    if (aiA !== aiB) return aiA ? 1 : -1;
+    return a.userId - b.userId;
+  });
+}
+
+/** 내 JWT userId에 해당하는 라운드 participantId — 없으면 빈 문자열(첫 행 폴백 금지). */
+function resolveMyRoundParticipantIdString(
+  finalized: readonly Player[],
+  myUserId: number | null,
+): string {
+  if (myUserId == null || !Number.isFinite(myUserId)) return "";
+  const mine = finalized.find(
+    (pl) => typeof pl.userId === "number" && pl.userId === myUserId,
+  );
+  return mine != null && Number.isFinite(mine.id) ? String(mine.id) : "";
+}
+
+/**
  * 라운드 API(participantId)와 방 상세를 맞춘다.
  * 이전 `players`의 participantId→닉네임 힌트로 방 참가자와 1:1 매칭해, 인덱스 정렬(userId vs participantId) 불일치로
  * isAi가 엇갈리던 문제를 피한다.
@@ -619,9 +646,9 @@ function buildPlayersFromRoundAndRoom(
       );
     }
     if (!rm) {
-      const rest = pool
-        .filter((c) => !usedUserIds.has(c.userId))
-        .sort((a, b) => a.userId - b.userId);
+      const rest = sortRoomParticipantsForStableRoundMatch(
+        pool.filter((c) => !usedUserIds.has(c.userId)),
+      );
       rm = rest[0];
     }
     if (rm) usedUserIds.add(rm.userId);
@@ -823,6 +850,8 @@ export default function RoomDetailPage() {
   } | null>(null);
   const [loadingStart, setLoadingStart] = useState(false);
   const [loadingSubmit, setLoadingSubmit] = useState(false);
+  /** 타이머 자동 제출과 수동 제출이 한 틱에 겹칠 때 `loadingSubmit`보다 먼저 막기 위한 동기 가드 */
+  const submitDrawingInFlightRef = useRef(false);
   const [loadingAiAction, setLoadingAiAction] = useState(false);
   const [leavingRoom, setLeavingRoom] = useState(false);
   const [error, setError] = useState("");
@@ -959,14 +988,30 @@ export default function RoomDetailPage() {
             return null;
           });
           const myUid = getJwtUserId(localStorage.getItem("accessToken"));
-          const mine =
-            myUid != null
-              ? finalized.find((pl) => pl.userId === myUid)
-              : undefined;
-          setParticipantId(String(mine?.id ?? finalized[0]?.id ?? ""));
+          setParticipantId(resolveMyRoundParticipantIdString(finalized, myUid));
         } catch (inner) {
           const st = getHttpStatus(inner);
-          if (st === 403 || st === 404) {
+          if (st === 404) {
+            routerRef.current.replace("/rooms");
+            return;
+          }
+          if (st === 403) {
+            const msg = inner instanceof Error ? inner.message : "";
+            // current-round는 방 입장 직후/재연결 타이밍에 잠깐 403-4가 날 수 있다.
+            // 즉시 튕기지 않고 방 상태를 유지한 채 재동기화한다.
+            if (
+              msg.includes(
+                "해당 방 참가자만 현재 라운드를 조회할 수 있습니다.",
+              ) ||
+              msg.includes("403-4")
+            ) {
+              setRoundInfo(null);
+              setSubmitInfo(null);
+              window.setTimeout(() => {
+                void refreshRoomParticipantsRef.current();
+              }, 350);
+              return;
+            }
             routerRef.current.replace("/rooms");
             return;
           }
@@ -1638,11 +1683,9 @@ export default function RoomDetailPage() {
               setSubmitInfo(persisted.submitInfo);
             }
             const myUid = getJwtUserId(localStorage.getItem("accessToken"));
-            const mine =
-              myUid != null
-                ? finalizedJoin.find((pl) => pl.userId === myUid)
-                : undefined;
-            setParticipantId(String(mine?.id ?? finalizedJoin[0]?.id ?? ""));
+            setParticipantId(
+              resolveMyRoundParticipantIdString(finalizedJoin, myUid),
+            );
           } catch {
             if (isStale()) return;
 
@@ -1973,11 +2016,9 @@ export default function RoomDetailPage() {
       );
       setPlayers((prev) => mergePlayersKeepSubmitted(prev, finalizedStart));
       const myUid = getJwtUserId(localStorage.getItem("accessToken"));
-      const mine =
-        myUid != null
-          ? finalizedStart.find((pl) => pl.userId === myUid)
-          : undefined;
-      setParticipantId(String(mine?.id ?? finalizedStart[0]?.id ?? ""));
+      setParticipantId(
+        resolveMyRoundParticipantIdString(finalizedStart, myUid),
+      );
     } catch (e) {
       setError(e instanceof Error ? e.message : "게임 시작에 실패했습니다.");
     } finally {
@@ -2042,6 +2083,11 @@ export default function RoomDetailPage() {
       return;
     }
 
+    if (submitDrawingInFlightRef.current) {
+      return;
+    }
+    submitDrawingInFlightRef.current = true;
+
     setError("");
     setLoadingSubmit(true);
     try {
@@ -2075,10 +2121,25 @@ export default function RoomDetailPage() {
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : "그림 제출에 실패했습니다.";
+      const st = getHttpStatus(e);
+      /*
+       * TIME_OVER 직후 클라이언트 자동 제출과, 서버 forceFinishRound(5초 뒤)의 TIMEOUT 더미 제출이
+       * 경쟁하면 서버가 먼저 제출 레코드를 넣어 400-2가 난다. 게임은 이미 진행된 것이므로 에러로 보이지 않게 한다.
+       */
+      if (
+        st === 400 &&
+        typeof msg === "string" &&
+        msg.includes("이미 제출을 완료한 참가자입니다")
+      ) {
+        setError("");
+        void refreshRoomParticipants();
+        return;
+      }
       setError(msg);
       throw e instanceof Error ? e : new Error(msg);
     } finally {
       setLoadingSubmit(false);
+      submitDrawingInFlightRef.current = false;
     }
   }
 
