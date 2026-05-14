@@ -726,8 +726,8 @@ function mergePlayersKeepSubmitted(prev: Player[], mapped: Player[]): Player[] {
 
 /** 라운드 종료 직후 결과를 볼 시간을 준 뒤 다음 라운드(또는 로비)로 동기화 */
 const ROUND_ADVANCE_SYNC_DELAY_MS = 10_000;
-/** 서버 RoundService.ROUND_TIME_LIMIT 과 동일 — API 에 timeLimit 이 없을 때만 */
-const FALLBACK_ROUND_TIME_LIMIT_SEC = 60;
+/** 서버 RoundService.ROUND_TIME_LIMIT(90) 과 동일 — API 에 timeLimit 이 없을 때만 */
+const FALLBACK_ROUND_TIME_LIMIT_SEC = 90;
 
 /** 서버 시작 시각 + 제한 초 → 모든 탭이 동일 마감 시각 사용 */
 function computeRoundCountdownEndsAtMs(
@@ -2295,6 +2295,7 @@ export default function RoomDetailPage() {
           statusLabel={statusLabel}
           submitLabel={submitLabel}
           roundTimerLabel={roundTimerLabel}
+          roundRemainingSec={roundRemainingSec}
           isMyHost={isMyHost}
           hasAiPlayer={hasAiPlayer}
           aiActionDisabled={
@@ -2843,12 +2844,16 @@ function LiveRankingSystemPanel({
   );
 }
 
+/** 마감 직전(초)부터 타이머 박스에 피버 연출 */
+const ROUND_TIMER_FEVER_LAST_SEC = 10;
+
 function TopHud({
   roomId,
   roundLabel,
   statusLabel,
   submitLabel,
   roundTimerLabel,
+  roundRemainingSec,
   isMyHost,
   hasAiPlayer,
   aiActionDisabled,
@@ -2868,6 +2873,8 @@ function TopHud({
   statusLabel: string;
   submitLabel: string;
   roundTimerLabel: string | null;
+  /** null 이면 타이머 비표시 구간 */
+  roundRemainingSec: number | null;
   isMyHost: boolean;
   hasAiPlayer: boolean;
   aiActionDisabled: boolean;
@@ -2901,13 +2908,53 @@ function TopHud({
           aria-live="polite"
         >
           {roundTimerLabel ? (
-            <div className="rounded-2xl border border-cyan-300/40 bg-cyan-500/10 px-5 py-2.5 text-center shadow-lg shadow-cyan-500/5 sm:py-3">
-              <p className="text-[10px] font-black uppercase tracking-[0.24em] text-cyan-200 sm:text-[11px]">
+            <div
+              className={[
+                "rounded-2xl border px-5 py-2.5 text-center sm:py-3",
+                "transition-[background-color,box-shadow] duration-300",
+                roundRemainingSec === 0
+                  ? "room-timer-burn border-transparent bg-slate-950/75"
+                  : roundRemainingSec != null &&
+                      roundRemainingSec > 0 &&
+                      roundRemainingSec <= ROUND_TIMER_FEVER_LAST_SEC
+                    ? "room-timer-fever border-cyan-300/40 bg-gradient-to-b from-amber-950/35 to-cyan-950/25"
+                    : "border-cyan-300/40 bg-cyan-500/10 shadow-lg shadow-cyan-500/5",
+              ].join(" ")}
+              aria-busy={roundRemainingSec === 0}
+            >
+              <p
+                className={[
+                  "text-[10px] font-black uppercase tracking-[0.24em] sm:text-[11px]",
+                  roundRemainingSec === 0
+                    ? "text-amber-200/90"
+                    : roundRemainingSec != null &&
+                        roundRemainingSec > 0 &&
+                        roundRemainingSec <= ROUND_TIMER_FEVER_LAST_SEC
+                      ? "text-amber-100/85"
+                      : "text-cyan-200",
+                ].join(" ")}
+              >
                 남은 시간
               </p>
-              <p className="mt-0.5 text-3xl font-black tabular-nums tracking-tight text-cyan-100 sm:text-4xl">
+              <p
+                className={[
+                  "mt-0.5 text-3xl font-black tabular-nums tracking-tight sm:text-4xl",
+                  roundRemainingSec === 0
+                    ? "text-amber-50 drop-shadow-[0_0_12px_rgba(251,191,36,0.35)]"
+                    : roundRemainingSec != null &&
+                        roundRemainingSec > 0 &&
+                        roundRemainingSec <= ROUND_TIMER_FEVER_LAST_SEC
+                      ? "text-amber-50"
+                      : "text-cyan-100",
+                ].join(" ")}
+              >
                 {roundTimerLabel}
               </p>
+              {roundRemainingSec === 0 ? (
+                <p className="mt-1 text-[10px] font-semibold text-amber-200/70">
+                  채점·동기화 대기 중
+                </p>
+              ) : null}
             </div>
           ) : null}
         </div>
