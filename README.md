@@ -48,24 +48,24 @@
 
 ## 기능 요약
 
-| 영역 | 내용 |
-| --- | --- |
-| **방** | 목록 · 생성 · 입장, 실시간 상태·채팅·랭킹 |
-| **게임** | 캔버스 드로잉, 라운드 진행, 제출, 결과 화면 |
-| **계정** | 로그인, 게스트 로그인, 마이페이지 |
-| **실시간** | `@stomp/stompjs` + SockJS |
+| 영역       | 내용                                        |
+| ---------- | ------------------------------------------- |
+| **방**     | 목록 · 생성 · 입장, 실시간 상태·채팅·랭킹   |
+| **게임**   | 캔버스 드로잉, 라운드 진행, 제출, 결과 화면 |
+| **계정**   | 로그인, 게스트 로그인, 마이페이지           |
+| **실시간** | `@stomp/stompjs` + SockJS                   |
 
 ---
 
 ## 기술 스택
 
-| 영역 | 사용 기술 |
-| --- | --- |
-| 프레임워크 | **Next.js** (App Router) |
-| UI | **React 19**, **Tailwind CSS v4** |
-| 언어 | **TypeScript** |
-| 실시간 | **SockJS**, **STOMP** |
-| 코드 품질 | **ESLint**, **Prettier** |
+| 영역       | 사용 기술                         |
+| ---------- | --------------------------------- |
+| 프레임워크 | **Next.js** (App Router)          |
+| UI         | **React 19**, **Tailwind CSS v4** |
+| 언어       | **TypeScript**                    |
+| 실시간     | **SockJS**, **STOMP**             |
+| 코드 품질  | **ESLint**, **Prettier**          |
 
 ---
 
@@ -96,8 +96,8 @@ npm run dev
 
 프로젝트 루트에 `.env.local` 을 만들고 아래를 설정합니다.
 
-| 변수명 | 설명 | 예시 |
-| --- | --- | --- |
+| 변수명                     | 설명                                   | 예시                    |
+| -------------------------- | -------------------------------------- | ----------------------- |
 | `NEXT_PUBLIC_API_BASE_URL` | Spring Boot **오리진** (끝에 `/` 없이) | `http://localhost:8080` |
 
 - **REST**: 클라이언트 → `/api/backend/...` → Next Route Handler(`src/app/api/backend/[...path]/route.ts`)가 백엔드로 **프록시**
@@ -109,14 +109,14 @@ npm run dev
 
 ## 스크립트
 
-| 명령어 | 설명 |
-| --- | --- |
-| `npm run dev` | 개발 서버 (기본 포트 3000) |
-| `npm run build` | 프로덕션 빌드 |
-| `npm run start` | 빌드 결과 실행 |
-| `npm run lint` | ESLint |
-| `npm run format` | Prettier 적용 |
-| `npm run format:check` | Prettier 검사만 |
+| 명령어                 | 설명                       |
+| ---------------------- | -------------------------- |
+| `npm run dev`          | 개발 서버 (기본 포트 3000) |
+| `npm run build`        | 프로덕션 빌드              |
+| `npm run start`        | 빌드 결과 실행             |
+| `npm run lint`         | ESLint                     |
+| `npm run format`       | Prettier 적용              |
+| `npm run format:check` | Prettier 검사만            |
 
 ---
 
@@ -138,10 +138,10 @@ src/
 
 ## 백엔드와의 연동
 
-| 구분 | 방식 |
-| --- | --- |
-| HTTP | `src/lib/api-client.ts` → `/api/backend` → Spring Boot |
-| 실시간 | SockJS + STOMP (방 · 채팅 · 랭킹 등) |
+| 구분   | 방식                                                   |
+| ------ | ------------------------------------------------------ |
+| HTTP   | `src/lib/api-client.ts` → `/api/backend` → Spring Boot |
+| 실시간 | SockJS + STOMP (방 · 채팅 · 랭킹 등)                   |
 
 API 상세는 백엔드 OpenAPI 문서를 참고하세요.
 
@@ -149,19 +149,19 @@ API 상세는 백엔드 OpenAPI 문서를 참고하세요.
 
 ## 브랜드 에셋
 
-| 파일 | 용도 |
-| --- | --- |
+| 파일                                                   | 용도                                                        |
+| ------------------------------------------------------ | ----------------------------------------------------------- |
 | [`public/drawrace-logo.png`](public/drawrace-logo.png) | **DrawRace** 팀 로고 (README·문서·발표 자료 등에 사용 가능) |
 
 ---
 
 ## 관련 링크
 
-| 구분 | URL |
-| --- | --- |
+| 구분   | URL                                                                                       |
+| ------ | ----------------------------------------------------------------------------------------- |
 | 서비스 | [drawrace.site](https://drawrace.site/) · [www.drawrace.site](https://www.drawrace.site/) |
-| 백엔드 | [INT1-Project-Team05](https://github.com/Programmers-Intern-Program/INT1-Project-Team05) |
-| ORG | [Programmers-Intern-Program](https://github.com/Programmers-Intern-Program) |
+| 백엔드 | [INT1-Project-Team05](https://github.com/Programmers-Intern-Program/INT1-Project-Team05)  |
+| ORG    | [Programmers-Intern-Program](https://github.com/Programmers-Intern-Program)               |
 
 ---
 
