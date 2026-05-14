@@ -836,6 +836,13 @@ export default function RoomDetailPage() {
   const [roundInfo, setRoundInfo] = useState<
     RoundStartData | CurrentRoundData | null
   >(null);
+  /** 제출 API await 동안 라운드가 바뀌면 늦은 응답으로 UI를 덮어쓰지 않기 위함 */
+  const activeRoundIdRef = useRef<number | null>(null);
+  useEffect(() => {
+    const id = roundInfo?.roundId;
+    activeRoundIdRef.current =
+      typeof id === "number" && Number.isFinite(id) && id > 0 ? id : null;
+  }, [roundInfo?.roundId]);
   const [submitInfo, setSubmitInfo] = useState<SubmitDrawingData | null>(null);
   const [timeOverSignal, setTimeOverSignal] = useState(0);
   /** RoundStartResponse.timeLimit을 roundId별로 기억해 current-round에도 적용 */
@@ -1157,11 +1164,9 @@ export default function RoomDetailPage() {
 
   /** 라운드 종료 후 제출 목록 API로 점수판·그림 갤러리 */
   useEffect(() => {
-    if (
-      !submitInfo?.roundFinished ||
-      submitInfo.roundWinnerParticipantId == null
-    )
-      return;
+    // roundFinished만 PLAYER_SUBMITTED로 올 수 있음(승자 ID 없음). STOMP로
+    // SubmitDrawingResponse를 놓쳐도 GET submissions의 winner 플래그로 표시 가능.
+    if (!submitInfo?.roundFinished) return;
     const rid = submitInfo.roundId;
     if (!Number.isFinite(rid) || rid <= 0) return;
 
@@ -1228,7 +1233,6 @@ export default function RoomDetailPage() {
     };
   }, [
     submitInfo?.roundFinished,
-    submitInfo?.roundWinnerParticipantId,
     submitInfo?.roundId,
     submitInfo?.gameFinished,
     roundInfo?.keyword,
@@ -2088,20 +2092,26 @@ export default function RoomDetailPage() {
     }
     submitDrawingInFlightRef.current = true;
 
+    const roundIdWhenSubmitting = roundInfo.roundId;
+
     setError("");
     setLoadingSubmit(true);
     try {
       const data = await apiFetch<SubmitDrawingData>(
-        `/api/rounds/${roundInfo.roundId}/submit`,
+        `/api/rounds/${roundIdWhenSubmitting}/submit`,
         {
           method: "POST",
           body: JSON.stringify({ participantId: pid, imageData }),
         },
       );
+      if (activeRoundIdRef.current !== roundIdWhenSubmitting) {
+        void refreshRoomParticipants();
+        return;
+      }
       setSubmitInfo(data);
       patchPersistedAfterSubmit(
         roomIdNumber,
-        roundInfo.roundId,
+        roundIdWhenSubmitting,
         pid,
         data,
         players.map((p) => p.id),
@@ -2120,6 +2130,8 @@ export default function RoomDetailPage() {
         scheduleRoundAdvanceSync();
       }
     } catch (e) {
+      const stillOnSubmitRound =
+        activeRoundIdRef.current === roundIdWhenSubmitting;
       const msg = e instanceof Error ? e.message : "그림 제출에 실패했습니다.";
       const st = getHttpStatus(e);
       /*
@@ -2131,6 +2143,11 @@ export default function RoomDetailPage() {
         typeof msg === "string" &&
         msg.includes("이미 제출을 완료한 참가자입니다")
       ) {
+        setError("");
+        void refreshRoomParticipants();
+        return;
+      }
+      if (!stillOnSubmitRound) {
         setError("");
         void refreshRoomParticipants();
         return;
@@ -3165,6 +3182,8 @@ function GameBoard({
   const [submitConfirmOpen, setSubmitConfirmOpen] = useState(false);
   const submitConfirmLockRef = useRef(false);
   const lastTimeOverSignalRef = useRef(0);
+  /** TIME_OVER 때 `loadingSubmit` 때문에 자동 제출을 못 했으면, 제출 완료 후 같은 라운드면 한 번 더 시도 */
+  const skippedTimeOverSubmitRoundRef = useRef<number | null>(null);
   const [canUndo, setCanUndo] = useState(false);
   const [canRedo, setCanRedo] = useState(false);
   const syncCanvasHistory = useCallback(() => {
@@ -3203,13 +3222,47 @@ function GameBoard({
     if (timeOverSignal <= 0) return;
     if (timeOverSignal === lastTimeOverSignalRef.current) return;
     lastTimeOverSignalRef.current = timeOverSignal;
-    if (loadingSubmit || myAlreadySubmitted) return;
-
+    if (loadingSubmit || myAlreadySubmitted) {
+      if (
+        loadingSubmit &&
+        activeRoundId != null &&
+        Number.isFinite(activeRoundId) &&
+        activeRoundId > 0
+      ) {
+        skippedTimeOverSubmitRoundRef.current = activeRoundId;
+      }
+      return;
+    }
+    skippedTimeOverSubmitRoundRef.current = null;
     const api = canvasRef.current;
     if (!api) return;
     // 타임오버 시에는 그림 유무와 관계없이 현재 캔버스를 자동 제출한다.
     void onSubmitDrawing(api.toDataUrl());
-  }, [timeOverSignal, loadingSubmit, myAlreadySubmitted, onSubmitDrawing]);
+  }, [
+    timeOverSignal,
+    loadingSubmit,
+    myAlreadySubmitted,
+    onSubmitDrawing,
+    activeRoundId,
+  ]);
+
+  useEffect(() => {
+    if (loadingSubmit) return;
+    const pending = skippedTimeOverSubmitRoundRef.current;
+    if (pending == null || activeRoundId == null) return;
+    if (pending !== activeRoundId) {
+      skippedTimeOverSubmitRoundRef.current = null;
+      return;
+    }
+    if (myAlreadySubmitted) {
+      skippedTimeOverSubmitRoundRef.current = null;
+      return;
+    }
+    skippedTimeOverSubmitRoundRef.current = null;
+    const api = canvasRef.current;
+    if (!api) return;
+    void onSubmitDrawing(api.toDataUrl());
+  }, [loadingSubmit, activeRoundId, myAlreadySubmitted, onSubmitDrawing]);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
