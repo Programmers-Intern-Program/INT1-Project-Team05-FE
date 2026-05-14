@@ -419,6 +419,23 @@ function normalizeRankingRow(raw: unknown): FinalRankingRow | null {
   };
 }
 
+/**
+ * 백엔드(RoundService): 마지막 일반 라운드 승수 동점이면 결승 라운드를 만들고,
+ * 게임 종료 시 Participant.markWinner()는 한 명뿐이다.
+ * isWinner가 오면 우선하고, 없으면 최다 승수 중 userId 순으로 한 명만 고른다(예외 데이터 방지).
+ */
+function pickFinalWinnerRow(rows: FinalRankingRow[]): FinalRankingRow | null {
+  if (rows.length === 0) return null;
+  const flagged = rows.filter((r) => r.isWinner);
+  if (flagged.length > 0) {
+    return [...flagged].sort((a, b) => a.userId - b.userId)[0]!;
+  }
+  const maxW = rows.reduce((m, r) => Math.max(m, r.roundWinCount), 0);
+  if (maxW <= 0) return null;
+  const top = rows.filter((r) => r.roundWinCount === maxW);
+  return [...top].sort((a, b) => a.userId - b.userId)[0] ?? null;
+}
+
 function roomCapacityFromDetail(d: RoomDetailData): {
   curPlayers: number;
   maxPlayers: number;
@@ -2614,7 +2631,7 @@ function RoundEndScoreboardOverlay({
               }
               className="rounded-2xl bg-gradient-to-r from-amber-500 to-orange-500 px-8 py-3 text-sm font-black text-slate-950 shadow-lg transition hover:from-amber-400 hover:to-orange-400"
             >
-              최종 순위 전체 보기
+              최종 우승 보기
             </button>
           ) : null}
           <button
@@ -2642,20 +2659,8 @@ function FinalRankingOverlay({
   board: FinalRankingBoardState;
   onClose: () => void;
 }) {
-  /** API의 isWinner가 둘 다 true로 올 수 있어, 화면은 라운드 승수 최댓값으로만 공동 우승 판별 */
-  const maxRoundWins = board.rows.reduce(
-    (m, r) => Math.max(m, r.roundWinCount),
-    0,
-  );
-  const podium = board.rows.filter(
-    (r) => r.roundWinCount === maxRoundWins && maxRoundWins > 0,
-  );
-  const headline =
-    maxRoundWins === 0
-      ? "—"
-      : podium.length === 1
-        ? `${podium[0]!.nickname} 님`
-        : `${podium.map((w) => w.nickname).join(" · ")} (공동 우승)`;
+  const winnerRow = pickFinalWinnerRow(board.rows);
+  const headline = winnerRow == null ? "—" : `${winnerRow.nickname} 님`;
 
   return (
     <div
@@ -2686,7 +2691,7 @@ function FinalRankingOverlay({
           {board.loading ? (
             <div className="flex flex-col items-center justify-center gap-3 py-12 text-slate-400">
               <div className="h-10 w-10 animate-spin rounded-full border-2 border-white/20 border-t-amber-400" />
-              <p className="text-sm font-medium">최종 순위를 불러오는 중…</p>
+              <p className="text-sm font-medium">최종 결과를 불러오는 중…</p>
             </div>
           ) : board.fetchError ? (
             <p className="rounded-2xl border border-rose-500/30 bg-rose-500/10 px-4 py-6 text-center text-sm text-rose-200">
@@ -2694,58 +2699,35 @@ function FinalRankingOverlay({
             </p>
           ) : board.rows.length === 0 ? (
             <p className="py-8 text-center text-sm text-slate-400">
-              표시할 순위가 없습니다.
+              표시할 결과가 없습니다.
+            </p>
+          ) : winnerRow == null ? (
+            <p className="py-8 text-center text-sm text-slate-400">
+              우승자를 표시할 수 없습니다.
             </p>
           ) : (
             <ol className="space-y-2">
-              {board.rows.map((row, index) => {
-                const rank = index + 1;
-                const medal =
-                  rank === 1
-                    ? "🥇"
-                    : rank === 2
-                      ? "🥈"
-                      : rank === 3
-                        ? "🥉"
-                        : `${rank}`;
-                const isChampion =
-                  maxRoundWins > 0 && row.roundWinCount === maxRoundWins;
-                return (
-                  <li
-                    key={row.userId}
-                    className={`flex items-center justify-between gap-3 rounded-2xl border px-4 py-3.5 ${
-                      isChampion
-                        ? "border-amber-400/40 bg-amber-500/10 ring-1 ring-amber-400/20"
-                        : "border-white/10 bg-slate-950/50"
-                    }`}
-                  >
-                    <div className="flex min-w-0 flex-1 items-center gap-3">
-                      <span className="w-8 shrink-0 text-center text-lg">
-                        {medal}
-                      </span>
-                      <div className="min-w-0">
-                        <p className="truncate font-bold text-white">
-                          {row.nickname}
-                        </p>
-                        <p className="text-xs text-slate-500">
-                          라운드 {row.roundWinCount}승
-                        </p>
-                      </div>
-                    </div>
-                    <div className="shrink-0 text-right">
-                      {isChampion ? (
-                        <span className="rounded-full border border-amber-400/40 bg-amber-500/15 px-2.5 py-1 text-xs font-black text-amber-200">
-                          우승
-                        </span>
-                      ) : (
-                        <span className="text-sm font-semibold text-slate-400">
-                          {row.roundWinCount}승
-                        </span>
-                      )}
-                    </div>
-                  </li>
-                );
-              })}
+              <li
+                key={winnerRow.userId}
+                className="flex items-center justify-between gap-3 rounded-2xl border border-amber-400/40 bg-amber-500/10 px-4 py-3.5 ring-1 ring-amber-400/20"
+              >
+                <div className="flex min-w-0 flex-1 items-center gap-3">
+                  <span className="w-8 shrink-0 text-center text-lg">🥇</span>
+                  <div className="min-w-0">
+                    <p className="truncate font-bold text-white">
+                      {winnerRow.nickname}
+                    </p>
+                    <p className="text-xs text-slate-500">
+                      라운드 {winnerRow.roundWinCount}승
+                    </p>
+                  </div>
+                </div>
+                <div className="shrink-0 text-right">
+                  <span className="rounded-full border border-amber-400/40 bg-amber-500/15 px-2.5 py-1 text-xs font-black text-amber-200">
+                    우승
+                  </span>
+                </div>
+              </li>
             </ol>
           )}
         </div>
